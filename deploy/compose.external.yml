@@ -1,0 +1,61 @@
+services:
+  web:
+    image: ${LIEMA_IMAGE:?LIEMA_IMAGE must be set}
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile
+    command: ["uvicorn", "auto_test.web:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+    restart: unless-stopped
+    ports:
+      - "${LIEMA_WEB_BIND:-127.0.0.1}:${LIEMA_WEB_PORT:-8080}:8080"
+    environment: &liema-external-environment
+      LIEMA_ENV: production
+      LIEMA_SESSION_COOKIE_SECURE: ${LIEMA_SESSION_COOKIE_SECURE:-false}
+      LIEMA_MASTER_KEY: ${LIEMA_MASTER_KEY:?LIEMA_MASTER_KEY must be set}
+      LIEMA_TASK_QUEUE_BACKEND: redis
+      LIEMA_TASK_EXECUTION_MODE: external
+      LIEMA_REDIS_HOST: ${LIEMA_REDIS_HOST:?LIEMA_REDIS_HOST must be set}
+      LIEMA_REDIS_PORT: ${LIEMA_REDIS_PORT:-6379}
+      LIEMA_REDIS_NAMESPACE: ${LIEMA_REDIS_NAMESPACE:-liema-auto}
+      LIEMA_REDIS_USERNAME: ${LIEMA_REDIS_USERNAME:-}
+      LIEMA_REDIS_PASSWORD: ${LIEMA_REDIS_PASSWORD:-}
+      LIEMA_DATABASE_BACKEND: mysql
+      LIEMA_MYSQL_HOST: ${LIEMA_MYSQL_HOST:?LIEMA_MYSQL_HOST must be set}
+      LIEMA_MYSQL_PORT: ${LIEMA_MYSQL_PORT:-3306}
+      LIEMA_MYSQL_DATABASE: ${LIEMA_MYSQL_DATABASE:?LIEMA_MYSQL_DATABASE must be set}
+      LIEMA_MYSQL_USER: ${LIEMA_MYSQL_USER:?LIEMA_MYSQL_USER must be set}
+      LIEMA_MYSQL_PASSWORD: ${LIEMA_MYSQL_PASSWORD:?LIEMA_MYSQL_PASSWORD must be set}
+      LIEMA_ARTIFACT_BACKEND: minio
+      LIEMA_MINIO_ENDPOINT: ${LIEMA_MINIO_ENDPOINT:?LIEMA_MINIO_ENDPOINT must be set}
+      LIEMA_MINIO_ACCESS_KEY: ${LIEMA_MINIO_ACCESS_KEY:?LIEMA_MINIO_ACCESS_KEY must be set}
+      LIEMA_MINIO_SECRET_KEY: ${LIEMA_MINIO_SECRET_KEY:?LIEMA_MINIO_SECRET_KEY must be set}
+      LIEMA_MINIO_BUCKET: ${LIEMA_MINIO_BUCKET:?LIEMA_MINIO_BUCKET must be set}
+      LIEMA_MINIO_SECURE: ${LIEMA_MINIO_SECURE:-false}
+    volumes: &liema-external-volumes
+      - liema-data:/app/data
+      - liema-runtime:/app/runtime
+      - liema-artifacts:/app/artifacts
+      - liema-instance:/app/instance
+      - liema-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    image: ${LIEMA_IMAGE:?LIEMA_IMAGE must be set}
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile
+    command: ["python", "-m", "auto_test.worker"]
+    restart: unless-stopped
+    environment: *liema-external-environment
+    volumes: *liema-external-volumes
+
+volumes:
+  liema-data:
+  liema-runtime:
+  liema-artifacts:
+  liema-instance:
+  liema-logs:

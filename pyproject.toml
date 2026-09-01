@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "auto-test"
+version = "2.0.0"
+description = "Auto Test automation and performance reporting platform"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "packaging>=20.0",
+  "requests>=2.31.0",
+  "PyYAML>=6.0",
+  "paramiko>=3.4.0",
+  "matplotlib>=3.7.0",
+  "fastapi>=0.115.0",
+  "uvicorn>=0.30.0",
+  "python-multipart>=0.0.9",
+  "cryptography>=42.0.0",
+  "python-docx>=1.1.0",
+  "reportlab>=4.1.0",
+  "pypdf>=4.0.0",
+  "PyMySQL>=1.1.0",
+  "minio>=7.2.0",
+  "redis>=5.0.0",
+]
+
+[project.scripts]
+auto-test = "auto_test.pipeline.runner:main"
+auto-test-web = "auto_test.web:main"
+auto-test-worker = "auto_test.worker:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+auto_test = ["static/*", "static/assets/*"]

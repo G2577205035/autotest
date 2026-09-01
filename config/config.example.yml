@@ -1,0 +1,95 @@
+# 烈马自动化测试平台 — 示例配置
+# 复制为 config.local.yml 后填写本机环境值；账号与 SSH 凭据统一从页面安全提交。
+
+defaults:
+  translate_name: es:zh-CHS
+
+api:
+  scheme: http
+  connect_timeout: 10
+  read_timeout: 60
+  upload_timeout: 300
+  retry_total: 2
+  # 内网业务 API 默认直连；仅在目标明确必须经过系统代理时改为 true。
+  use_system_proxy: false
+
+monitor:
+  containers:
+    - systemadmin
+    - analysisadmin
+    - translateadmin
+  enable_perf: true
+  enable_log_monitor: true
+
+upload:
+  mode: auto
+  size_limit_mb: 1024
+
+# SQLite 使用本地路径；切换到 MySQL 时填写连接参数，密码优先通过环境变量或密钥管理注入。
+database:
+  backend: sqlite
+  tasks_path: data/tasks.db
+  platform_path: data/platform.db
+  host: 127.0.0.1
+  port: 3306
+  database: liema_automation_test
+  user: liema_test
+  password: ""
+  connect_timeout: 3
+  read_timeout: 30
+  write_timeout: 30
+
+artifact_storage:
+  backend: local
+  # MinIO模式下该目录作为报告生成暂存区与下载缓存。
+  root: artifacts
+  endpoint: 127.0.0.1:9000
+  access_key: ""
+  secret_key: ""
+  bucket: liema-test-artifacts
+  secure: false
+  prefix: liema
+  create_bucket: false
+
+# Redis 只用于跨进程任务唤醒和短期协调，任务最终状态仍以数据库为准。
+# 本地单进程保持 local + embedded；部署独立 Worker 时切换为 redis + external。
+task_queue:
+  backend: local
+  execution_mode: embedded
+  redis_url: redis://127.0.0.1:6379/0
+  # 平台提供拆分变量时可改用 redis_host/redis_port；密码只从环境变量读取。
+  redis_host: ""
+  redis_port: 6379
+  redis_db: 0
+  redis_username: ""
+  password_env: SERVICE_REDIS_PASSWORD
+  namespace: liema
+  connect_timeout: 1
+  # 接口场景 Worker 并发上限；为避免压垮上游服务，最大值为 5。
+  interface_concurrency: 5
+
+stress:
+  enable: false
+  # 默认只检测，不在目标服务器上自动修改软件源或安装系统包。
+  auto_install: false
+  # 全局并发上限；同一目标服务器的压测始终串行执行。
+  max_concurrent_jobs: 1
+  workers: 0
+  cpu_load: 80
+  duration: 30
+  remote_env: ""
+  install_command: ""
+
+export:
+  enable: true
+  types: tran,original
+
+ai_checks:
+  enable: false
+  simple_translation_enable: true
+  xiaoyi_translation_enable: true
+  xiaoyi_summary_enable: true
+  sample_path: C:\path\to\ai-sample.txt
+  max_file_ids: 1
+  request_timeout: 30
+  stream_timeout: 300
