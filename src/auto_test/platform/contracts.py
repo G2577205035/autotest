@@ -171,3 +171,83 @@ class PlatformRepository(Protocol):
     def list_interface_scenario_batch_runs(
         self, project_id: str, batch_id: str
     ) -> list[dict[str, Any]]: ...
+    def save_model_eval_suite(
+        self,
+        project_id: str | None,
+        data: dict[str, Any],
+        suite_id: str = "",
+        *,
+        created_by: str = "",
+    ) -> dict[str, Any]: ...
+    def get_model_eval_suite(
+        self, project_id: str, suite_id: str, *, include_global: bool = True
+    ) -> dict[str, Any] | None: ...
+    def list_model_eval_suites(
+        self, project_id: str, *, include_global: bool = True, limit: int = 200
+    ) -> list[dict[str, Any]]: ...
+    def publish_model_eval_suite_version(
+        self,
+        project_id: str,
+        suite_id: str,
+        manifest: dict[str, Any],
+        cases: list[dict[str, Any]],
+        *,
+        upstream: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+    def get_model_eval_suite_version(
+        self, project_id: str, version_id: str
+    ) -> dict[str, Any] | None: ...
+    def create_model_eval_run(
+        self,
+        project_id: str,
+        *,
+        model_profile_id: str = "",
+        suite_version_id: str = "",
+        backend: str = "mock",
+        backend_version: str = "",
+        snapshot: dict[str, Any] | None = None,
+        created_by: str = "",
+    ) -> dict[str, Any]: ...
+    def claim_model_eval_run(self) -> dict[str, Any] | None: ...
+    def update_model_eval_run(
+        self,
+        run_id: str,
+        *,
+        status: str | None = None,
+        phase: str | None = None,
+        progress: int | None = None,
+        message: str | None = None,
+    ) -> None: ...
+    def add_model_eval_run_event(
+        self,
+        run_id: str,
+        event_type: str,
+        message: str,
+        *,
+        phase: str = "",
+        progress: int | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> None: ...
+    def request_stop_model_eval_run(
+        self, project_id: str, run_id: str
+    ) -> dict[str, Any] | None: ...
+    def is_model_eval_run_stop_requested(self, run_id: str) -> bool: ...
+    def finish_model_eval_run(
+        self,
+        project_id: str,
+        run_id: str,
+        *,
+        status: str,
+        summary: dict[str, Any] | None = None,
+        artifact_ref: str = "",
+        error: str = "",
+    ) -> dict[str, Any]: ...
+    def get_model_eval_run(
+        self, project_id: str, run_id: str
+    ) -> dict[str, Any] | None: ...
+    def list_model_eval_runs(
+        self, project_id: str, limit: int = 100
+    ) -> list[dict[str, Any]]: ...
+    def list_model_eval_run_events(
+        self, project_id: str, run_id: str, after_id: int = 0, limit: int = 1000
+    ) -> list[dict[str, Any]]: ...

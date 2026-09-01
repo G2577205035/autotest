@@ -11,6 +11,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from auto_test.evaluation.persistence import ModelEvaluationStoreMixin
+
 
 DEFAULT_REPORT_SECTIONS = [
     {"key": "overview", "title": "1. 测试背景与概述", "mode": "mixed", "enabled": True,
@@ -28,7 +30,7 @@ DEFAULT_REPORT_SECTIONS = [
 ]
 
 
-class PlatformStore:
+class PlatformStore(ModelEvaluationStoreMixin):
     """SQLite store for versioned settings and retryable report jobs."""
 
     backend = "sqlite"
@@ -309,6 +311,114 @@ class PlatformStore:
                     FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS model_eval_suites (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT,
+                    source TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL DEFAULT 'general',
+                    description TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    created_by TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS model_eval_suite_versions (
+                    id TEXT PRIMARY KEY,
+                    suite_id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    manifest_json TEXT NOT NULL,
+                    content_sha256 TEXT NOT NULL,
+                    upstream_json TEXT NOT NULL DEFAULT '{}',
+                    published_at REAL NOT NULL,
+                    UNIQUE(suite_id, version),
+                    FOREIGN KEY(suite_id) REFERENCES model_eval_suites(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS model_eval_cases (
+                    id TEXT PRIMARY KEY,
+                    version_id TEXT NOT NULL,
+                    case_key TEXT NOT NULL,
+                    category TEXT NOT NULL DEFAULT 'general',
+                    tags_json TEXT NOT NULL DEFAULT '[]',
+                    payload_json TEXT NOT NULL,
+                    weight REAL NOT NULL DEFAULT 1,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(version_id, case_key),
+                    FOREIGN KEY(version_id) REFERENCES model_eval_suite_versions(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS model_eval_runs (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    model_profile_id TEXT NOT NULL DEFAULT '',
+                    suite_version_id TEXT NOT NULL DEFAULT '',
+                    backend TEXT NOT NULL,
+                    backend_version TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL,
+                    phase TEXT NOT NULL,
+                    progress INTEGER NOT NULL DEFAULT 0,
+                    message TEXT NOT NULL DEFAULT '',
+                    error TEXT NOT NULL DEFAULT '',
+                    snapshot_json TEXT NOT NULL,
+                    summary_json TEXT NOT NULL DEFAULT '{}',
+                    artifact_ref TEXT NOT NULL DEFAULT '',
+                    created_by TEXT NOT NULL DEFAULT '',
+                    stop_requested INTEGER NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL,
+                    started_at REAL,
+                    finished_at REAL,
+                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS model_eval_case_results (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    case_id TEXT NOT NULL DEFAULT '',
+                    attempt INTEGER NOT NULL DEFAULT 1,
+                    status TEXT NOT NULL,
+                    metrics_json TEXT NOT NULL DEFAULT '{}',
+                    score_json TEXT NOT NULL DEFAULT '{}',
+                    artifact_ref TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    UNIQUE(run_id, case_id, attempt),
+                    FOREIGN KEY(run_id) REFERENCES model_eval_runs(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS model_eval_run_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    phase TEXT NOT NULL DEFAULT '',
+                    progress INTEGER,
+                    data_json TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL,
+                    FOREIGN KEY(run_id) REFERENCES model_eval_runs(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS model_eval_manual_reviews (
+                    id TEXT PRIMARY KEY,
+                    result_id TEXT NOT NULL,
+                    reviewer_id TEXT NOT NULL DEFAULT '',
+                    score_json TEXT NOT NULL DEFAULT '{}',
+                    comment TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    FOREIGN KEY(result_id) REFERENCES model_eval_case_results(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS model_eval_comparisons (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    run_ids_json TEXT NOT NULL,
+                    config_json TEXT NOT NULL DEFAULT '{}',
+                    created_by TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+                );
+
                 CREATE TABLE IF NOT EXISTS project_memberships (
                     project_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
@@ -378,6 +488,20 @@ class PlatformStore:
                     ON interface_scenario_runs(status, created_at);
                 CREATE INDEX IF NOT EXISTS idx_interface_scenario_runs_batch_status
                     ON interface_scenario_runs(batch_id, status);
+                CREATE INDEX IF NOT EXISTS idx_model_eval_suites_project
+                    ON model_eval_suites(project_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_model_eval_versions_suite
+                    ON model_eval_suite_versions(suite_id, version);
+                CREATE INDEX IF NOT EXISTS idx_model_eval_cases_version
+                    ON model_eval_cases(version_id, category, sort_order);
+                CREATE INDEX IF NOT EXISTS idx_model_eval_runs_project
+                    ON model_eval_runs(project_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_model_eval_runs_status
+                    ON model_eval_runs(status, created_at);
+                CREATE INDEX IF NOT EXISTS idx_model_eval_case_results_run
+                    ON model_eval_case_results(run_id, status);
+                CREATE INDEX IF NOT EXISTS idx_model_eval_events_run
+                    ON model_eval_run_events(run_id, id);
                 CREATE INDEX IF NOT EXISTS idx_memberships_user
                     ON project_memberships(user_id, project_id);
                 CREATE INDEX IF NOT EXISTS idx_sessions_user_expiry
@@ -465,6 +589,11 @@ class PlatformStore:
                    SET status='interrupted',finished_at=?
                    WHERE status='running' AND COALESCE(scenario_json,'') IN ('', '{}')""",
                 (time.time(),),
+            )
+            connection.execute(
+                """UPDATE model_eval_runs SET status='queued',phase='queued',progress=0,
+                   message='服务重启后恢复评测任务',started_at=NULL,stop_requested=0
+                   WHERE status IN ('preparing','running','scoring','reporting')"""
             )
             connection.execute(
                 """DELETE FROM stress_job_secrets WHERE job_id IN (

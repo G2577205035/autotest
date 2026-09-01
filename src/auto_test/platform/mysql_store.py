@@ -389,6 +389,76 @@ PLATFORM_SCHEMA = [
         KEY idx_interface_scenario_runs_batch_status(batch_id, status),
         CONSTRAINT fk_interface_scenario_run_project FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+    """CREATE TABLE IF NOT EXISTS model_eval_suites (
+        id VARCHAR(64) PRIMARY KEY, project_id VARCHAR(64) NULL,
+        source VARCHAR(64) NOT NULL, name VARCHAR(160) NOT NULL,
+        category VARCHAR(64) NOT NULL DEFAULT 'general', description TEXT NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'draft', created_by VARCHAR(64) NOT NULL DEFAULT '',
+        created_at DOUBLE NOT NULL, updated_at DOUBLE NOT NULL,
+        KEY idx_model_eval_suites_project(project_id, updated_at),
+        CONSTRAINT fk_model_eval_suite_project FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+    """CREATE TABLE IF NOT EXISTS model_eval_suite_versions (
+        id VARCHAR(64) PRIMARY KEY, suite_id VARCHAR(64) NOT NULL, version INT NOT NULL,
+        manifest_json LONGTEXT NOT NULL, content_sha256 VARCHAR(64) NOT NULL,
+        upstream_json LONGTEXT NOT NULL, published_at DOUBLE NOT NULL,
+        UNIQUE KEY uk_model_eval_suite_version(suite_id, version),
+        KEY idx_model_eval_versions_suite(suite_id, version),
+        CONSTRAINT fk_model_eval_version_suite FOREIGN KEY(suite_id) REFERENCES model_eval_suites(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+    """CREATE TABLE IF NOT EXISTS model_eval_cases (
+        id VARCHAR(64) PRIMARY KEY, version_id VARCHAR(64) NOT NULL,
+        case_key VARCHAR(160) NOT NULL, category VARCHAR(64) NOT NULL DEFAULT 'general',
+        tags_json LONGTEXT NOT NULL, payload_json LONGTEXT NOT NULL,
+        weight DOUBLE NOT NULL DEFAULT 1, sort_order INT NOT NULL DEFAULT 0,
+        UNIQUE KEY uk_model_eval_case(version_id, case_key),
+        KEY idx_model_eval_cases_version(version_id, category, sort_order),
+        CONSTRAINT fk_model_eval_case_version FOREIGN KEY(version_id) REFERENCES model_eval_suite_versions(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+    """CREATE TABLE IF NOT EXISTS model_eval_runs (
+        id VARCHAR(64) PRIMARY KEY, project_id VARCHAR(64) NOT NULL,
+        model_profile_id VARCHAR(64) NOT NULL DEFAULT '', suite_version_id VARCHAR(64) NOT NULL DEFAULT '',
+        backend VARCHAR(64) NOT NULL, backend_version VARCHAR(64) NOT NULL DEFAULT '',
+        status VARCHAR(32) NOT NULL, phase VARCHAR(64) NOT NULL, progress INT NOT NULL DEFAULT 0,
+        message TEXT NOT NULL, error LONGTEXT NOT NULL, snapshot_json LONGTEXT NOT NULL,
+        summary_json LONGTEXT NOT NULL, artifact_ref TEXT NOT NULL,
+        created_by VARCHAR(64) NOT NULL DEFAULT '', stop_requested TINYINT NOT NULL DEFAULT 0,
+        created_at DOUBLE NOT NULL, started_at DOUBLE NULL, finished_at DOUBLE NULL,
+        KEY idx_model_eval_runs_project(project_id, created_at),
+        KEY idx_model_eval_runs_status(status, created_at),
+        CONSTRAINT fk_model_eval_run_project FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+    """CREATE TABLE IF NOT EXISTS model_eval_case_results (
+        id VARCHAR(64) PRIMARY KEY, run_id VARCHAR(64) NOT NULL,
+        case_id VARCHAR(64) NOT NULL DEFAULT '', attempt INT NOT NULL DEFAULT 1,
+        status VARCHAR(32) NOT NULL, metrics_json LONGTEXT NOT NULL,
+        score_json LONGTEXT NOT NULL, artifact_ref TEXT NOT NULL, created_at DOUBLE NOT NULL,
+        UNIQUE KEY uk_model_eval_case_result(run_id, case_id, attempt),
+        KEY idx_model_eval_case_results_run(run_id, status),
+        CONSTRAINT fk_model_eval_result_run FOREIGN KEY(run_id) REFERENCES model_eval_runs(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+    """CREATE TABLE IF NOT EXISTS model_eval_run_events (
+        id BIGINT PRIMARY KEY AUTO_INCREMENT, run_id VARCHAR(64) NOT NULL,
+        event_type VARCHAR(64) NOT NULL, message TEXT NOT NULL,
+        phase VARCHAR(64) NOT NULL DEFAULT '', progress INT NULL,
+        data_json LONGTEXT NOT NULL, created_at DOUBLE NOT NULL,
+        KEY idx_model_eval_events_run(run_id, id),
+        CONSTRAINT fk_model_eval_event_run FOREIGN KEY(run_id) REFERENCES model_eval_runs(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+    """CREATE TABLE IF NOT EXISTS model_eval_manual_reviews (
+        id VARCHAR(64) PRIMARY KEY, result_id VARCHAR(64) NOT NULL,
+        reviewer_id VARCHAR(64) NOT NULL DEFAULT '', score_json LONGTEXT NOT NULL,
+        comment TEXT NOT NULL, created_at DOUBLE NOT NULL,
+        KEY idx_model_eval_reviews_result(result_id, created_at),
+        CONSTRAINT fk_model_eval_review_result FOREIGN KEY(result_id) REFERENCES model_eval_case_results(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+    """CREATE TABLE IF NOT EXISTS model_eval_comparisons (
+        id VARCHAR(64) PRIMARY KEY, project_id VARCHAR(64) NOT NULL,
+        run_ids_json LONGTEXT NOT NULL, config_json LONGTEXT NOT NULL,
+        created_by VARCHAR(64) NOT NULL DEFAULT '', created_at DOUBLE NOT NULL,
+        KEY idx_model_eval_comparisons_project(project_id, created_at),
+        CONSTRAINT fk_model_eval_comparison_project FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
     """CREATE TABLE IF NOT EXISTS project_memberships (
         project_id VARCHAR(64) NOT NULL, user_id VARCHAR(64) NOT NULL,
         role VARCHAR(32) NOT NULL, created_at DOUBLE NOT NULL, updated_at DOUBLE NOT NULL,

@@ -48,6 +48,10 @@ def ai_checks_cfg():
     return CFG.get("ai_checks", {})
 
 
+def model_evaluation_cfg():
+    return CFG.get("model_evaluation", {})
+
+
 def default_translate_name() -> str:
     """Return the platform translation language used when a run omits one."""
     return str(CFG.get("defaults", {}).get("translate_name", "") or "").strip()

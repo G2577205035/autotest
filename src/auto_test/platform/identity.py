@@ -27,11 +27,18 @@ LOGIN_FAILURE_WINDOW_SECONDS = 5 * 60
 PROJECT_ROLES = {
     "viewer": {
         "label": "只读成员",
-        "permissions": {"project:view"},
+        "permissions": {"project:view", "evaluation:view"},
     },
     "tester": {
         "label": "测试执行者",
-        "permissions": {"project:view", "test:execute", "report:manage", "server:operate"},
+        "permissions": {
+            "project:view",
+            "test:execute",
+            "report:manage",
+            "server:operate",
+            "evaluation:view",
+            "evaluation:operate",
+        },
     },
     "project_admin": {
         "label": "项目管理员",
@@ -42,6 +49,9 @@ PROJECT_ROLES = {
             "server:operate",
             "project:members",
             "interface:manage",
+            "evaluation:view",
+            "evaluation:manage",
+            "evaluation:operate",
         },
     },
 }
@@ -706,6 +716,10 @@ def _required_permission(method: str, path: str) -> str:
         r"/api/interface-scenarios/[^/]+/execute", path
     ):
         return "test:execute"
+    if path.startswith("/api/model-evaluation/runs"):
+        return "evaluation:operate"
+    if path.startswith("/api/model-evaluation/suites"):
+        return "evaluation:manage"
     project_interface_assets = (
         "/api/interface-assets",
         "/api/interface-modules",

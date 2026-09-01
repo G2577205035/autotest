@@ -10,6 +10,10 @@ from auto_test.common.paths import PROJECT_ROOT, prepare_runtime_layout
 from auto_test.common.runtime_secrets import ensure_runtime_master_key
 from auto_test.core.task_manager import TaskManager
 from auto_test.core.task_queue import create_task_signal_queue
+from auto_test.evaluation.manager import (
+    ModelEvaluationManager,
+    create_model_evaluation_backend_resolver,
+)
 from auto_test.platform.artifact_storage import create_artifact_storage
 from auto_test.platform.persistence import create_platform_repository
 from auto_test.platform.api import create_platform_api
@@ -29,6 +33,12 @@ def main() -> None:
         signal_queue=signal_queue,
     )
     interface_scenario_manager = report_manager.interface_scenario_manager
+    model_evaluation_manager = ModelEvaluationManager(
+        platform_store,
+        artifact_storage,
+        create_model_evaluation_backend_resolver(PROJECT_ROOT),
+        signal_queue=signal_queue,
+    )
     stopping = threading.Event()
     heartbeat_stopped = threading.Event()
 
@@ -42,6 +52,7 @@ def main() -> None:
         task_manager._notify_worker()
         report_manager._notify_worker()
         interface_scenario_manager._notify_workers()
+        model_evaluation_manager._notify_worker()
 
     for signal_name in ("SIGINT", "SIGTERM"):
         available = getattr(signal, signal_name, None)
@@ -51,6 +62,7 @@ def main() -> None:
     task_manager.start()
     report_manager.start()
     interface_scenario_manager.start()
+    model_evaluation_manager.start()
     heartbeat = threading.Thread(
         target=heartbeat_loop,
         name="liema-worker-heartbeat",
@@ -58,7 +70,7 @@ def main() -> None:
     )
     heartbeat.start()
     log.info(
-        "独立 Worker 已启动：queue=%s，负责业务自动化、接口场景与企业报告",
+        "独立 Worker 已启动：queue=%s，负责业务自动化、接口场景、模型评测与企业报告",
         signal_queue.backend,
     )
     try:
@@ -69,6 +81,7 @@ def main() -> None:
         heartbeat_stopped.set()
         heartbeat.join(timeout=2)
         signal_queue.clear_heartbeat("primary")
+        model_evaluation_manager.stop()
         interface_scenario_manager.stop()
         report_manager.stop()
         task_manager.stop()

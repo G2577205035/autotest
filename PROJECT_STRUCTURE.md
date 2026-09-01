@@ -1,6 +1,6 @@
 # 烈马自动化测试平台：项目结构与接手指引
 
-> 最后更新：2026-08-28  
+> 最后更新：2026-09-01  
 > 适用项目：`auto-test` / Python 包 `auto_test`  
 > 维护要求：任何新增、删除、移动或重命名目录、源码分层、启动入口、部署文件的改动，都必须在同一次改动中更新本文件。
 
@@ -63,6 +63,7 @@
 src/auto_test/
 ├── common/         配置、日志、运行路径和通用函数
 ├── core/           业务自动化服务、任务管理和调度
+├── evaluation/     模型评测领域、持久化、隔离后端和结果映射
 ├── integrations/   目标 HTTP API、SSH 等外部系统适配
 ├── pipeline/       上传、解析、翻译、断言、导出等流水线阶段
 ├── monitoring/     主机指标、CPU/GPU 压测和能力探测
@@ -75,6 +76,7 @@ src/auto_test/
 
 - `src/auto_test/common/` 不依赖具体业务流程，提供所有模块可复用的基础能力。
 - `src/auto_test/core/` 负责用例级编排，不直接承载页面表现。
+- `src/auto_test/evaluation/` 负责模型测试集/运行领域、SQLite/MySQL 持久化契约、EvalScope 隔离子进程、Mock 后端、停止语义和稳定结果映射；不得在主服务环境直接导入 EvalScope。
 - `src/auto_test/integrations/` 隔离外部系统差异，不把公司服务器或凭据写死。
 - `src/auto_test/pipeline/` 组织既有业务自动化阶段，必须保留兼容能力。
 - `src/auto_test/monitoring/` 负责在线监控、预检和压力测试，监控与满载压测结论分离。
@@ -115,6 +117,7 @@ Compose 的构建上下文仍是项目根目录；移动部署文件时必须同
 ## 5. 工具、文档与测试
 
 - `scripts/prepare_offline_bundle.py`：准备并校验离线依赖包。
+- `scripts/model_evaluation_poc.py`：使用本机假 OpenAI 服务重复验证隔离 EvalScope 的标准评测、WMT24++ 与性能压测入口。
 - `scripts/upload_production_env.py`：在内存中组装生产变量并通过 SFTP 创建受限环境文件。
 - `scripts/documentation/`：一次性或可复用的文档生成工具；当前 `scripts/documentation/build_future_plan.py` 输出到 `deliverables/`。
 - `docs/assets/`：文档引用的图片等静态附件。

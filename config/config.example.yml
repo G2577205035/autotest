@@ -68,6 +68,16 @@ task_queue:
   # 接口场景 Worker 并发上限；为避免压垮上游服务，最大值为 5。
   interface_concurrency: 5
 
+# 模型评测使用独立 Python 3.11 子进程运行锁定版本的 EvalScope，避免污染主服务依赖。
+# 路径也可通过 LIEMA_EVALSCOPE_PYTHON 注入；API Key 只在运行快照中记录环境变量名。
+model_evaluation:
+  default_backend: mock
+  evalscope_version: 1.11.1
+  evalscope_python: ""
+  # 正式环境可指向预取并校验过的离线模型/数据缓存根目录。
+  cache_root: ""
+  stop_grace_seconds: 5
+
 stress:
   enable: false
   # 默认只检测，不在目标服务器上自动修改软件源或安装系统包。

@@ -6,6 +6,7 @@
 
 ## 交付与部署文档
 
+- [`docs/product-requirements-document.md`](docs/product-requirements-document.md)：产品定位、功能规划、当前实现、技术栈、未完成范围和后续路线。
 - [`docs/delivery-acceptance.md`](docs/delivery-acceptance.md)：交付范围、角色权限、功能验收、安全边界、已知限制和验收记录模板。
 - [`docs/pycharm-lan-deployment-guide.md`](docs/pycharm-lan-deployment-guide.md)：从 Windows/PyCharm 构建 Linux 镜像、制作无敏感信息的交付包，并部署到一套新局域网环境的逐步操作手册。
 - [`docs/deployment-backup-rollback-runbook.md`](docs/deployment-backup-rollback-runbook.md)：正式部署前置信息、Redis 认证、MySQL/MinIO/持久卷备份、升级、恢复与回滚步骤。
