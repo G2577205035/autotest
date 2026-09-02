@@ -86,6 +86,7 @@ def _resolve_request_secrets(
     platform_store: PlatformRepository,
     model_profile_id: str,
 ) -> dict[str, str]:
+    resolved: dict[str, str] = {}
     source_name = str(task_config.pop("api_key_env", "") or "").strip()
     if source_name:
         if not _ENV_NAME.fullmatch(source_name):
@@ -93,16 +94,24 @@ def _resolve_request_secrets(
         value = os.environ.get(source_name, "")
         if not value:
             raise RuntimeError(f"模型评测凭据环境变量未设置：{source_name}")
-        return {"LIEMA_EVAL_MODEL_API_KEY": value}
-    if not model_profile_id:
-        return {}
-    profile = platform_store.get_model_profile(model_profile_id)
-    if not profile:
-        raise RuntimeError("被测模型配置不存在")
-    encrypted = str(profile.get("api_key_enc") or "")
-    if not encrypted:
-        return {}
-    return {"LIEMA_EVAL_MODEL_API_KEY": decrypt_secret(encrypted)}
+        resolved["LIEMA_EVAL_MODEL_API_KEY"] = value
+    elif model_profile_id:
+        profile = platform_store.get_model_profile(model_profile_id)
+        if not profile:
+            raise RuntimeError("被测模型配置不存在")
+        encrypted = str(profile.get("api_key_enc") or "")
+        if encrypted:
+            resolved["LIEMA_EVAL_MODEL_API_KEY"] = decrypt_secret(encrypted)
+    judge = task_config.get("judge")
+    judge_profile_id = str(judge.get("profile_id") or "") if isinstance(judge, dict) else ""
+    if judge_profile_id:
+        judge_profile = platform_store.get_model_profile(judge_profile_id)
+        if not judge_profile:
+            raise RuntimeError("裁判模型配置不存在")
+        judge_encrypted = str(judge_profile.get("api_key_enc") or "")
+        if judge_encrypted:
+            resolved["LIEMA_EVAL_JUDGE_API_KEY"] = decrypt_secret(judge_encrypted)
+    return resolved
 
 
 class ModelEvaluationManager:
@@ -184,14 +193,23 @@ class ModelEvaluationManager:
         self._notify_worker()
         return run
 
-    def _record_event(self, run_id: str, event: BackendEvent) -> None:
+    def _record_event(self, project_id: str, run_id: str, event: BackendEvent) -> None:
+        event_data = dict(event.data)
+        case_result = event_data.pop("case_result", None)
+        partial_summary = event_data.pop("partial_summary", None)
+        if isinstance(case_result, dict):
+            self._persist_case_results(
+                project_id,
+                run_id,
+                {"cases": [case_result]},
+            )
         self.platform_store.add_model_eval_run_event(
             run_id,
             event.event_type,
             event.message,
             phase=event.phase,
             progress=event.progress,
-            data=event.data,
+            data=event_data,
         )
         self.platform_store.update_model_eval_run(
             run_id,
@@ -199,6 +217,7 @@ class ModelEvaluationManager:
             phase=event.phase or None,
             progress=event.progress,
             message=event.message,
+            summary=partial_summary if isinstance(partial_summary, dict) else None,
         )
 
     def run_once(self) -> dict[str, Any] | None:
@@ -236,7 +255,7 @@ class ModelEvaluationManager:
                 self._active_backend[run_id] = backend
             result = backend.run(
                 request,
-                on_event=lambda event: self._record_event(run_id, event),
+                on_event=lambda event: self._record_event(project_id, run_id, event),
                 should_stop=lambda: self._stop.is_set()
                 or self.platform_store.is_model_eval_run_stop_requested(run_id),
             )
@@ -253,11 +272,12 @@ class ModelEvaluationManager:
             )
         except Exception as exc:
             log.error("模型评测 Worker 执行失败：run=%s error=%s", run_id, type(exc).__name__)
+            current = self.platform_store.get_model_eval_run(project_id, run_id) or {}
             return self.platform_store.finish_model_eval_run(
                 project_id,
                 run_id,
                 status="failed",
-                summary={},
+                summary=dict(current.get("summary") or {}),
                 artifact_ref=(
                     self.artifact_storage.reference(work_dir) if work_dir else ""
                 ),

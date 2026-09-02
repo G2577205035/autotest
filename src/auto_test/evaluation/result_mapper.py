@@ -75,6 +75,11 @@ def _normalized_summary(documents: list[dict[str, Any]]) -> dict[str, Any]:
         succeeded = int(payload.get("Success Requests") or 0)
         stage = {
             "concurrency": int(payload.get("Concurrency") or 0),
+            "target_rps": (
+                float(payload.get("Request Rate (req/s)"))
+                if payload.get("Request Rate (req/s)") is not None
+                else None
+            ),
             "total_requests": total,
             "successful_requests": succeeded,
             "failed_requests": int(payload.get("Failed Requests") or 0),
@@ -111,7 +116,9 @@ def _normalized_summary(documents: list[dict[str, Any]]) -> dict[str, Any]:
         }
         performance_stages.append(stage)
     if performance_stages:
-        performance_stages.sort(key=lambda item: item["concurrency"])
+        performance_stages.sort(
+            key=lambda item: float(item.get("target_rps") or item.get("concurrency") or 0)
+        )
         total = sum(item["total_requests"] for item in performance_stages)
         succeeded = sum(item["successful_requests"] for item in performance_stages)
         stable = [
@@ -126,8 +133,14 @@ def _normalized_summary(documents: list[dict[str, Any]]) -> dict[str, Any]:
             "successful_requests": succeeded,
             "failed_requests": total - succeeded,
             "success_rate": round(succeeded / total * 100, 2) if total else None,
-            "max_concurrency": max(item["concurrency"] for item in performance_stages),
-            "max_stable_concurrency": max((item["concurrency"] for item in stable), default=None),
+            "max_concurrency": max(
+                (item["concurrency"] for item in performance_stages if item["concurrency"] > 0),
+                default=None,
+            ),
+            "max_stable_concurrency": max(
+                (item["concurrency"] for item in stable if item["concurrency"] > 0),
+                default=None,
+            ),
             "performance": {
                 "request_throughput": last.get("request_throughput"),
                 "output_tokens_per_second": last.get("output_token_throughput"),
@@ -274,6 +287,7 @@ class EvalScopeResultMapper:
         with performance_path.open("w", encoding="utf-8-sig", newline="") as handle:
             fieldnames = (
                 "concurrency",
+                "target_rps",
                 "total_requests",
                 "successful_requests",
                 "failed_requests",

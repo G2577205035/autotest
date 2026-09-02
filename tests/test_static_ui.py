@@ -41,7 +41,7 @@ class StaticWorkspaceTests(unittest.TestCase):
         self.assertEqual(len(self.parser.ids), len(set(self.parser.ids)))
 
     def test_workspace_tabs_have_matching_panels(self):
-        self.assertEqual(set(self.parser.tabs), {"stress", "reports", "interfaces"})
+        self.assertEqual(set(self.parser.tabs), {"stress", "reports", "evaluation", "interfaces"})
         self.assertEqual(dict(self.parser.tabs), dict(self.parser.panels))
         self.assertEqual(self.parser.tabs["stress"], {"sessions", "setup", "live", "history"})
         self.assertEqual(self.parser.tabs["reports"], {"create", "template", "jobs"})
@@ -149,10 +149,18 @@ class StaticWorkspaceTests(unittest.TestCase):
             "evaluationRunKind",
             "evaluationModelProfile",
             "evaluationRunsBody",
+            "evaluationWorkspaceTabs",
             "evaluationProgressBar",
             "evaluationEventsList",
             "evaluationResultsBody",
             "stopEvaluationButton",
+            "deleteEvaluationButton",
+            "openEvaluationReportButton",
+            "evaluationReportPanel",
+            "evaluationReportConclusion",
+            "evaluationReportMetrics",
+            "downloadEvaluationReportDocxButton",
+            "downloadEvaluationReportPdfButton",
         ):
             self.assertIn(f'id="{element_id}"', self.html)
         self.assertIn('data-view="evaluation"', self.html)
@@ -162,8 +170,91 @@ class StaticWorkspaceTests(unittest.TestCase):
         self.assertIn('function refreshSelectedEvaluationRun()', self.javascript)
         self.assertIn('downloadEvaluationArtifact("performance")', self.javascript)
         self.assertIn('hasPermission("evaluation:operate")', self.javascript)
+        self.assertIn('data-workspace-tab="evaluation"', self.html)
+        self.assertIn('data-workspace-name="detail"', self.html)
+        self.assertIn('data-workspace-name="report"', self.html)
+        self.assertIn('查看评测报告', self.html)
+        self.assertIn('下载 Word', self.html)
+        self.assertIn('下载 PDF', self.html)
+        self.assertIn('技术附件（供开发、复核和二次分析）', self.html)
+        self.assertIn('评测摘要 JSON', self.html)
+        self.assertIn('性能明细 CSV', self.html)
+        self.assertIn('function evaluationRunLabel(run)', self.javascript)
+        self.assertIn('evaluationRunsSignature', self.javascript)
+        self.assertIn('function deleteEvaluationRun(runId)', self.javascript)
+        self.assertIn('method:"DELETE"', self.javascript)
+        self.assertIn('data-evaluation-delete=', self.javascript)
+        self.assertIn('data-evaluation-report=', self.javascript)
+        self.assertIn('async function loadEvaluationReport(force)', self.javascript)
+        self.assertIn('function downloadEvaluationReport(format)', self.javascript)
+        self.assertIn('用例达标率', self.html)
+        self.assertIn('function evaluationCaseStatusPill(status)', self.javascript)
+        self.assertIn('passed:"达标",failed:"未达标",error:"执行异常"', self.javascript)
+        self.assertIn('evaluationCaseStatusPill(item.status)', self.javascript)
+        self.assertIn('function readableEvaluationEventMessage(item)', self.javascript)
+        self.assertIn('message.includes("�")', self.javascript)
+        self.assertIn('EvalScope 评测已启动', self.javascript)
+        self.assertIn('.status.evaluation-not-met{color:#ffd27d', self.stylesheet)
+        self.assertNotIn('shortId(run.id);', self.javascript)
         self.assertIn('.evaluation-metric-grid{display:grid;grid-template-columns:repeat(5', self.stylesheet)
         self.assertIn('.evaluation-detail-grid{display:grid;grid-template-columns:', self.stylesheet)
+
+    def test_model_evaluation_run_and_report_lists_are_paginated_and_balanced(self):
+        for element_id in (
+            "evaluationRunsPageSummary",
+            "evaluationRunsPrevButton",
+            "evaluationRunsPageIndicator",
+            "evaluationRunsNextButton",
+            "evaluationReportCasesPageSummary",
+            "evaluationReportCasesPrevButton",
+            "evaluationReportCasesPageIndicator",
+            "evaluationReportCasesNextButton",
+        ):
+            self.assertIn(f'id="{element_id}"', self.html)
+        self.assertIn("evaluationRunsPage: 1", self.javascript)
+        self.assertIn("evaluationRunsPageSize: 7", self.javascript)
+        self.assertIn("evaluationReportCasesPageSize: 8", self.javascript)
+        self.assertIn("function setEvaluationRunsPage(page)", self.javascript)
+        self.assertIn("function setEvaluationReportCasesPage(page)", self.javascript)
+        self.assertIn("state.evaluationRuns.slice(start,start+state.evaluationRunsPageSize)", self.javascript)
+        self.assertIn("cases.slice(start,start+state.evaluationReportCasesPageSize)", self.javascript)
+        self.assertIn(".evaluation-layout{align-items:stretch}", self.stylesheet)
+        self.assertIn(".evaluation-runs-panel{display:flex;flex-direction:column;min-height:640px}", self.stylesheet)
+        self.assertIn(".evaluation-runs-panel>.table-wrap{flex:1;max-height:none}", self.stylesheet)
+
+    def test_model_evaluation_advanced_workflows_are_visible_and_wired(self):
+        for element_id in (
+            "evaluationSuiteForm",
+            "evaluationSuiteList",
+            "evaluationSuiteVersion",
+            "evaluationJudgeProfile",
+            "evaluationManualReviewPercent",
+            "evaluationServerSession",
+            "evaluationComparisonRunList",
+            "createEvaluationComparisonButton",
+            "evaluationReviewDialog",
+            "evaluationReviewForm",
+            "evaluationScoringConfidence",
+            "evaluationCapacity",
+        ):
+            self.assertIn(f'id="{element_id}"', self.html)
+        for label in (
+            "中英双向翻译",
+            "WMT2024++ 标准翻译",
+            "报告写作能力",
+            "情报生产能力",
+            "深度性能与容量",
+            "项目自定义测试集",
+            "测试集管理",
+            "模型对比",
+        ):
+            self.assertIn(label, self.html + self.javascript)
+        self.assertIn('function renderEvaluationSuites()', self.javascript)
+        self.assertIn('function renderEvaluationComparison()', self.javascript)
+        self.assertIn('function submitEvaluationReview(event)', self.javascript)
+        self.assertIn('/api/model-evaluation/comparisons', self.javascript)
+        self.assertIn('/import",{method:"POST",body:form}', self.javascript)
+        self.assertIn('.evaluation-management-layout{display:grid', self.stylesheet)
 
     def test_business_project_switchers_hide_internal_project_keys(self):
         self.assertIn('function businessProjectLabel(project)', self.javascript)
@@ -262,8 +353,8 @@ class StaticWorkspaceTests(unittest.TestCase):
         self.assertNotIn('key === "cpu_temp_c" || key === "gpu_temp_c"', self.javascript)
 
     def test_desktop_typography_has_readable_1080p_baseline_and_cache_version(self):
-        self.assertIn('styles.css?v=20260902.1', self.html)
-        self.assertIn('app.js?v=20260902.1', self.html)
+        self.assertIn('styles.css?v=20260902.9', self.html)
+        self.assertIn('app.js?v=20260902.9', self.html)
         self.assertIn('@media(min-width:981px)', self.stylesheet)
         self.assertIn('body{font-size:16px;line-height:1.6}', self.stylesheet)
         self.assertIn('table{font-size:15px}', self.stylesheet)
@@ -359,6 +450,32 @@ class StaticWorkspaceTests(unittest.TestCase):
         self.assertIn('烈马是平台名称', self.html)
         self.assertNotIn('id="setupProjectKey" value="LIEMA"', self.html)
         self.assertNotIn('id="setupProjectName" value="烈马测试项目"', self.html)
+
+    def test_identity_workspace_uses_tabbed_tables_filters_and_drawers(self):
+        for tab in ("users", "projects", "roles", "audit"):
+            self.assertIn(f'data-identity-tab="{tab}"', self.html)
+            self.assertIn(f'data-identity-panel="{tab}"', self.html)
+        for drawer in (
+            "identityUserDrawer",
+            "identityProjectDrawer",
+            "identityMembershipDrawer",
+        ):
+            self.assertIn(f'id="{drawer}"', self.html)
+        self.assertIn('id="identityUserSearch"', self.html)
+        self.assertIn('id="identityProjectSearch"', self.html)
+        self.assertIn('id="identityRoleSearch"', self.html)
+        self.assertIn('id="identityProjectsBody"', self.html)
+        self.assertIn('id="identityUsersPageSummary"', self.html)
+        self.assertIn('id="identityProjectsPageSummary"', self.html)
+        self.assertIn('function activateIdentityTab(tab)', self.javascript)
+        self.assertIn('function openIdentityUserDrawer(userId)', self.javascript)
+        self.assertIn('function openIdentityProjectDrawer(projectId)', self.javascript)
+        self.assertIn('method:userId?"PATCH":"POST"', self.javascript)
+        self.assertIn('method:projectId?"PATCH":"POST"', self.javascript)
+        self.assertIn('.identity-filter-toolbar', self.stylesheet)
+        self.assertIn('.identity-drawer{', self.stylesheet)
+        self.assertNotIn('class="identity-summary stat-grid"', self.html)
+        self.assertNotIn('class="identity-admin-grid"', self.html)
 
     def test_dashboard_removes_demo_readiness_and_shows_operational_run_fields(self):
         self.assertNotIn('上线准备度', self.html)

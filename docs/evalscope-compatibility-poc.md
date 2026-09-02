@@ -38,7 +38,7 @@ python -m pip install "evalscope[perf]==1.11.1"
 ..\.venv\Scripts\python.exe scripts\model_evaluation_poc.py
 ```
 
-本次最终复验输出位于 `runtime/model-evaluation-poc/20260902-102441/`（运行目录不提交）。标准评测与性能压测两个入口均返回 `completed`，性能结果已归一化为阶梯、吞吐和百分位指标。
+本机运行配置已在 `config/config.local.yml` 接入 `.qa/evalscope-poc/python311/python.exe`，主服务和独立 Worker 重启后即可识别。最新复验输出位于 `runtime/model-evaluation-poc/20260902-172253/`（运行目录不提交）。标准评测与性能压测两个入口均返回 `completed`，性能结果已归一化为阶梯、吞吐和百分位指标。
 
 ## 3. 已确认的兼容处理
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
@@ -20,6 +21,7 @@ class ArtifactStorage(Protocol):
     def resolve_file(self, reference: str | Path, *, container: str | Path | None = None) -> Path: ...
     def publish_tree(self, path: str | Path) -> list[str]: ...
     def materialize_tree(self, reference: str | Path) -> Path: ...
+    def delete_tree(self, reference: str | Path) -> int: ...
 
 
 class LocalArtifactStorage:
@@ -80,6 +82,19 @@ class LocalArtifactStorage:
         if not path.is_dir():
             raise FileNotFoundError(path)
         return path
+
+    def delete_tree(self, reference: str | Path) -> int:
+        path = self.resolve(reference)
+        if path == self.root:
+            raise ValueError("cannot delete the artifact storage root")
+        if not path.exists():
+            return 0
+        if path.is_file():
+            path.unlink()
+            return 1
+        count = sum(1 for item in path.rglob("*") if item.is_file())
+        shutil.rmtree(path)
+        return count
 
 
 class MinioArtifactStorage(LocalArtifactStorage):
@@ -217,6 +232,17 @@ class MinioArtifactStorage(LocalArtifactStorage):
         if not found and not any(root.iterdir()):
             raise FileNotFoundError(reference)
         return root
+
+    def delete_tree(self, reference: str | Path) -> int:
+        key = self._key_for_reference(reference).rstrip("/")
+        if not key or key == self.prefix:
+            raise ValueError("cannot delete the MinIO artifact storage root")
+        prefix = key + "/"
+        objects = list(self.client.list_objects(self.bucket, prefix=prefix, recursive=True))
+        for item in objects:
+            self.client.remove_object(self.bucket, str(item.object_name))
+        local_count = super().delete_tree(self.resolve(reference))
+        return max(len(objects), local_count)
 
 
 def create_artifact_storage(

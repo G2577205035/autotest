@@ -10,6 +10,11 @@ from statistics import mean
 from typing import Any
 
 from auto_test.evaluation.backends.base import emit
+from auto_test.evaluation.advanced import (
+    merge_rule_and_judge_score,
+    parse_judge_response,
+    select_manual_review_indices,
+)
 from auto_test.evaluation.contracts import (
     BackendResult,
     EvaluationRequest,
@@ -53,18 +58,31 @@ class NativeEvaluationBackend:
     ) -> BackendResult:
         request.work_dir.mkdir(parents=True, exist_ok=True)
         config = dict(request.task_config)
+        dimension = str(config.get("evaluation_dimension") or "foundation")
         cases = list(config.get("cases") or [])
         if not cases:
             raise ValueError("原生模型评测没有可执行用例")
         api_key = str(request.secret_env.get("LIEMA_EVAL_MODEL_API_KEY") or "")
+        judge_config = dict(config.get("judge") or {})
+        judge_api_key = str(request.secret_env.get("LIEMA_EVAL_JUDGE_API_KEY") or "")
+        review_percent = max(0, min(int(config.get("manual_review_percent") or 0), 100))
+        review_indices = select_manual_review_indices(len(cases), review_percent)
         results: list[dict[str, Any]] = []
-        emit(on_event, "phase", "基础能力测试准备完成", phase="preparing", progress=5)
+        phase_names = {
+            "foundation": "基础能力",
+            "translation": "中英双向翻译",
+            "report_writing": "报告写作",
+            "intelligence": "情报生产",
+            "custom": "项目自定义",
+        }
+        dimension_name = phase_names.get(dimension, "模型能力")
+        emit(on_event, "phase", f"{dimension_name}测试准备完成", phase="preparing", progress=5)
         for index, case in enumerate(cases, start=1):
             if should_stop and should_stop():
-                self._write_artifacts(request.work_dir, results, self._summary(results))
-                emit(on_event, "stopped", "基础评测已安全停止", phase="stopped")
+                self._write_artifacts(request.work_dir, results, self._summary(results, dimension))
+                emit(on_event, "stopped", f"{dimension_name}评测已安全停止", phase="stopped")
                 return BackendResult(
-                    status="stopped", summary=self._summary(results), raw={"cases": results}
+                    status="stopped", summary=self._summary(results, dimension), raw={"cases": results}
                 )
             payload = dict(case.get("payload") or case)
             messages = [
@@ -84,7 +102,51 @@ class NativeEvaluationBackend:
                 timeout=float(config.get("timeout") or 60.0),
                 stream=bool(config.get("stream")),
             )
-            score = score_response(observed.text, payload.get("rules"))
+            rules = dict(payload.get("rules") or {})
+            if payload.get("references") and not rules.get("references"):
+                rules["references"] = list(payload.get("references") or [])
+            rule_score = score_response(observed.text, rules)
+            rubric = list(payload.get("rubric") or [])
+            judge_result: dict[str, Any] | None = None
+            if rubric and judge_config.get("profile_id"):
+                judge_payload = {
+                    "rubric": rubric,
+                    "reference": list(payload.get("references") or [])[:3],
+                    "candidate": observed.text,
+                    "instruction": "只依据给定材料评分；确定性事实或格式错误不得忽略。",
+                }
+                judge_observed = self.client.call(
+                    base_url=str(judge_config.get("api_url") or ""),
+                    model=str(judge_config.get("model") or ""),
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "你是独立评测裁判。只输出 JSON，字段为 score(0到1)、"
+                                "confidence(0到1)、reason、rubric(数组)。不得猜测材料外事实。"
+                            ),
+                        },
+                        {"role": "user", "content": json.dumps(judge_payload, ensure_ascii=False)},
+                    ],
+                    api_key=judge_api_key,
+                    temperature=0.0,
+                    max_tokens=int(judge_config.get("max_tokens") or 512),
+                    timeout=float(config.get("timeout") or 60.0),
+                    stream=False,
+                )
+                judge_result = parse_judge_response(judge_observed.text, rubric)
+                judge_result["model_profile_id"] = str(judge_config.get("profile_id") or "")
+                judge_result["model"] = str(judge_config.get("model") or "")
+                if not judge_observed.succeeded:
+                    judge_result.update({"status": "error", "score": None, "reason": judge_observed.error_type or "裁判调用失败"})
+            score = merge_rule_and_judge_score(rule_score, judge_result)
+            review_required = index - 1 in review_indices
+            score["manual_review"] = {
+                "status": "pending" if review_required else "not_required",
+                "required": review_required,
+            }
+            if review_required:
+                score["scoring_source"] = f"{score.get('scoring_source') or 'deterministic_rules'}_pending_review"
             status = "passed" if observed.succeeded and score["passed"] else (
                 "error" if not observed.succeeded else "failed"
             )
@@ -102,29 +164,33 @@ class NativeEvaluationBackend:
                 "variant_type": str(payload.get("variant_type") or ""),
             }
             results.append(result)
-            partial = self._summary(results)
+            partial = self._summary(results, dimension)
             emit(
                 on_event,
                 "progress",
-                f"基础用例 {index}/{len(cases)} 完成：{result['name']}",
+                f"{dimension_name}用例 {index}/{len(cases)} 完成：{result['name']}",
                 phase="running",
                 progress=5 + round(index / len(cases) * 85),
                 completed=index,
                 total=len(cases),
                 success_rate=partial.get("success_rate"),
                 p95_ms=(partial.get("performance") or {}).get("latency_p95_ms"),
-                token_throughput=(partial.get("performance") or {}).get("output_tokens_per_second"),
+                output_tokens_per_second=(partial.get("performance") or {}).get(
+                    "output_tokens_per_second"
+                ),
+                case_result=result,
+                partial_summary=partial,
             )
-        emit(on_event, "phase", "正在汇总规则评分与鲁棒性", phase="scoring", progress=94)
-        summary = self._summary(results)
+        emit(on_event, "phase", "正在汇总规则、裁判状态与评分置信度", phase="scoring", progress=94)
+        summary = self._summary(results, dimension)
         artifacts = self._write_artifacts(request.work_dir, results, summary)
-        emit(on_event, "completed", "基础能力评测完成", phase="completed", progress=100)
+        emit(on_event, "completed", f"{dimension_name}评测完成", phase="completed", progress=100)
         return BackendResult(
             status="completed", summary=summary, artifacts=artifacts, raw={"cases": results}
         )
 
     @staticmethod
-    def _summary(results: list[dict[str, Any]]) -> dict[str, Any]:
+    def _summary(results: list[dict[str, Any]], dimension: str = "foundation") -> dict[str, Any]:
         metrics = [dict(item.get("metrics") or {}) for item in results]
         latency = [float(item["latency_ms"]) for item in metrics if item.get("latency_ms") is not None]
         ttft = [float(item["ttft_ms"]) for item in metrics if item.get("ttft_ms") is not None]
@@ -147,8 +213,19 @@ class NativeEvaluationBackend:
         failed = sum(1 for item in results if item.get("status") == "failed")
         errored = sum(1 for item in results if item.get("status") == "error")
         scores = [float((item.get("score") or {}).get("score") or 0.0) for item in results]
+        category_scores: dict[str, list[float]] = {}
+        judge_states: dict[str, int] = {}
+        confidences: list[float] = []
+        for item in results:
+            category = str(item.get("category") or "general")
+            category_scores.setdefault(category, []).append(float((item.get("score") or {}).get("score") or 0.0))
+            score_detail = dict(item.get("score") or {})
+            judge_state = str((score_detail.get("judge") or {}).get("status") or "not_configured")
+            judge_states[judge_state] = judge_states.get(judge_state, 0) + 1
+            if score_detail.get("confidence") is not None:
+                confidences.append(float(score_detail["confidence"]))
         return {
-            "mode": "foundation",
+            "mode": dimension,
             "total_cases": len(results),
             "completed_cases": len(results),
             "passed_cases": passed,
@@ -173,6 +250,20 @@ class NativeEvaluationBackend:
             },
             "error_types": errors,
             "robustness": summarize_robustness(results),
+            "dimensions": {
+                category: {
+                    "case_count": len(values),
+                    "quality_score": round(mean(values) * 100, 2),
+                }
+                for category, values in sorted(category_scores.items())
+            },
+            "scoring": {
+                "rule_scored_cases": len(results),
+                "judge_status_counts": judge_states,
+                "manual_reviewed_cases": sum(1 for item in results if ((item.get("score") or {}).get("manual_review") or {}).get("status") == "completed"),
+                "pending_manual_review_cases": sum(1 for item in results if ((item.get("score") or {}).get("manual_review") or {}).get("status") == "pending"),
+                "confidence": round(mean(confidences) * 100, 2) if confidences else None,
+            },
         }
 
     @staticmethod

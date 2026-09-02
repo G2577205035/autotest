@@ -40,6 +40,9 @@ class FakeMinio:
 
         return [Item(key) for stored_bucket, key in sorted(self.objects) if stored_bucket == bucket and key.startswith(prefix)]
 
+    def remove_object(self, bucket, key):
+        self.objects.pop((bucket, key), None)
+
 
 class MySQLAdapterTests(unittest.TestCase):
     def test_sql_adapter_converts_qmark_and_insert_ignore(self):
@@ -128,6 +131,9 @@ class MinioAdapterTests(unittest.TestCase):
                 (root / "restored" / "server_stress" / "job-1" / "report.txt").read_text(encoding="utf-8"),
                 "report-data",
             )
+            self.assertEqual(storage.delete_tree(storage.reference(job_dir)), 1)
+            self.assertFalse(job_dir.exists())
+            self.assertFalse(fake.objects)
 
     def test_reference_cannot_escape_configured_prefix(self):
         with tempfile.TemporaryDirectory() as temp_dir:

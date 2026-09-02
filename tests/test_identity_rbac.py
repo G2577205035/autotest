@@ -175,6 +175,24 @@ class IdentityStoreTests(unittest.TestCase):
             _required_permission("POST", "/api/model-profiles"),
             "platform:manage",
         )
+        self.assertEqual(
+            _required_permission("DELETE", "/api/model-evaluation/runs/run-1"),
+            "evaluation:manage",
+        )
+        self.assertEqual(
+            _required_permission("POST", "/api/model-evaluation/suites"),
+            "evaluation:manage",
+        )
+        self.assertEqual(
+            _required_permission("POST", "/api/model-evaluation/comparisons"),
+            "evaluation:operate",
+        )
+        self.assertEqual(
+            _required_permission(
+                "POST", "/api/model-evaluation/runs/run-1/results/result-1/reviews"
+            ),
+            "evaluation:manage",
+        )
 
 
 class IdentityApiTests(unittest.TestCase):

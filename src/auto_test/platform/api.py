@@ -44,11 +44,17 @@ from auto_test.platform.task_store import TaskNotFoundError, TaskStore
 from auto_test.platform.upload_ownership import write_upload_owner
 from auto_test.reporting.interface_scenario import generate_interface_scenario_report
 from auto_test.reporting.manager import ReportManager
+from auto_test.reporting.model_evaluation import generate_model_evaluation_report
 from auto_test.core.task_queue import TaskSignalQueue
 from auto_test.core.interface_scenario_manager import InterfaceScenarioManager
 from auto_test.evaluation.catalog import (
     ensure_builtin_evaluation_suites,
     latest_suite_for_run_kind,
+)
+from auto_test.evaluation.advanced import (
+    build_run_comparison,
+    parse_evaluation_import,
+    validate_evaluation_cases,
 )
 from auto_test.evaluation.manager import (
     ModelEvaluationManager,
@@ -312,9 +318,39 @@ class ModelEvaluationRunInput(BaseModel):
     run_kind: str = Field(default="mock", max_length=40)
     plan: str = Field(default="quick", max_length=40)
     model_profile_id: str = Field(default="", max_length=64)
+    suite_version_id: str = Field(default="", max_length=64)
+    judge_model_profile_id: str = Field(default="", max_length=64)
+    server_session_id: str = Field(default="", max_length=64)
+    manual_review_percent: int = Field(default=0, ge=0, le=100)
     stream: bool = False
     max_tokens: int = Field(default=256, ge=8, le=8192)
     timeout_seconds: float = Field(default=60, ge=1, le=600)
+
+
+class ModelEvaluationSuiteInput(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    category: str = Field(default="custom", max_length=64)
+    description: str = Field(default="", max_length=4000)
+
+
+class ModelEvaluationSuiteVersionInput(BaseModel):
+    cases: list[dict[str, Any]] = Field(min_length=1, max_length=5000)
+    manifest: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelEvaluationCloneInput(BaseModel):
+    name: str = Field(default="", max_length=160)
+
+
+class ModelEvaluationManualReviewInput(BaseModel):
+    score: float = Field(ge=0, le=100)
+    comment: str = Field(default="", max_length=4000)
+    rubric: dict[str, float] = Field(default_factory=dict)
+
+
+class ModelEvaluationComparisonInput(BaseModel):
+    run_ids: list[str] = Field(min_length=2, max_length=10)
+    allow_mismatch: bool = False
 
 
 class ReportTemplateInput(BaseModel):
@@ -564,6 +600,36 @@ def create_platform_api(
     def current_project_id(request: Request) -> str:
         return str((identity_context(request).get("current_project") or {}).get("id") or "")
 
+    def ensure_model_evaluation_report(
+        project_id: str, run_id: str
+    ) -> dict[str, Any]:
+        run = platform_store.get_model_eval_run(project_id, run_id)
+        if not run:
+            raise KeyError(run_id)
+        if str(run.get("status") or "") not in {"completed", "failed", "stopped"}:
+            raise RuntimeError("评测尚未结束，暂不能生成最终报告")
+        results, _ = platform_store.list_model_eval_case_results(
+            project_id, run_id, offset=0, limit=1000
+        )
+        artifact_ref = str(run.get("artifact_ref") or "")
+        if artifact_ref:
+            try:
+                root = artifact_storage.materialize_tree(artifact_ref)
+            except FileNotFoundError:
+                root = artifact_storage.resolve(artifact_ref)
+                root.mkdir(parents=True, exist_ok=True)
+        else:
+            root = artifact_storage.workspace("model-evaluations", project_id, run_id)
+            artifact_ref = artifact_storage.reference(root)
+        generated = generate_model_evaluation_report(run, results, root)
+        artifact_storage.publish_tree(root)
+        if str(run.get("artifact_ref") or "") != artifact_ref:
+            platform_store.set_model_eval_run_artifact_ref(
+                project_id, run_id, artifact_ref
+            )
+        generated["artifact_ref"] = artifact_ref
+        return generated
+
     def legacy_visible(request: Request) -> bool:
         context = identity_context(request)
         if not bool((context.get("user") or {}).get("is_superuser")):
@@ -598,6 +664,25 @@ def create_platform_api(
         return session
 
     def audit_interface_change(
+        request: Request,
+        action: str,
+        target_type: str,
+        target_id: str,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        context = identity_context(request)
+        platform_store.add_audit_event(
+            actor_user_id=str((context.get("user") or {}).get("id") or "") or None,
+            project_id=current_project_id(request) or None,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            outcome="success",
+            ip_address=str(request.client.host if request.client else "")[:100],
+            detail=detail or {},
+        )
+
+    def audit_evaluation_change(
         request: Request,
         action: str,
         target_type: str,
@@ -1375,8 +1460,17 @@ def create_platform_api(
     @router.get("/model-evaluation/bootstrap")
     async def model_evaluation_bootstrap(request: Request):
         project_id = current_project_id(request)
-        suites = await run_in_threadpool(ensure_builtin_evaluation_suites, platform_store)
-        runs = await run_in_threadpool(platform_store.list_model_eval_runs, project_id, 100)
+        await run_in_threadpool(ensure_builtin_evaluation_suites, platform_store)
+        suites = await run_in_threadpool(platform_store.list_model_eval_suites, project_id)
+        for suite in suites:
+            versions = await run_in_threadpool(
+                platform_store.list_model_eval_suite_versions, project_id, suite["id"], 1
+            )
+            suite["latest_version"] = versions[0] if versions else None
+        runs = await run_in_threadpool(platform_store.list_model_eval_runs, project_id, 500)
+        comparisons = await run_in_threadpool(
+            platform_store.list_model_eval_comparisons, project_id, 50
+        )
         profiles = await run_in_threadpool(platform_store.list_model_profiles)
         evaluation_config = dict(model_evaluation_cfg())
         runtime_value = str(
@@ -1386,7 +1480,13 @@ def create_platform_api(
             **public_preset_catalog(),
             "suites": suites,
             "runs": runs,
+            "comparisons": comparisons,
             "profiles": [public_profile(item) for item in profiles],
+            "server_sessions": [
+                item
+                for item in await run_in_threadpool(server_session_manager.list_sessions)
+                if visible_server_session(item, request)
+            ],
             "runtime": {
                 "evalscope_version": str(evaluation_config.get("evalscope_version") or "1.11.1"),
                 "evalscope_configured": bool(runtime_value),
@@ -1410,6 +1510,170 @@ def create_platform_api(
             )
             suite["latest_version"] = versions[0] if versions else None
         return {"suites": suites}
+
+    @router.post("/model-evaluation/suites", status_code=201)
+    async def create_model_evaluation_suite(
+        payload: ModelEvaluationSuiteInput, request: Request
+    ):
+        project_id = current_project_id(request)
+        suite = await run_in_threadpool(
+            platform_store.save_model_eval_suite,
+            project_id,
+            {
+                "source": "project_custom",
+                "name": payload.name,
+                "category": payload.category,
+                "description": payload.description,
+                "status": "draft",
+            },
+            "",
+            created_by=str((identity_context(request).get("user") or {}).get("id") or ""),
+        )
+        audit_evaluation_change(
+            request,
+            "model_evaluation.suite.create",
+            "model_eval_suite",
+            str(suite.get("id") or ""),
+            {"category": payload.category},
+        )
+        return suite
+
+    @router.post("/model-evaluation/suites/{suite_id}/clone", status_code=201)
+    async def clone_model_evaluation_suite(
+        suite_id: str, payload: ModelEvaluationCloneInput, request: Request
+    ):
+        project_id = current_project_id(request)
+        source = await run_in_threadpool(
+            platform_store.get_model_eval_suite, project_id, suite_id
+        )
+        if not source:
+            raise HTTPException(status_code=404, detail="evaluation suite not found")
+        versions = await run_in_threadpool(
+            platform_store.list_model_eval_suite_versions, project_id, suite_id, 1
+        )
+        if not versions:
+            raise HTTPException(status_code=409, detail="测试集还没有可复制的已发布版本")
+        cases = await run_in_threadpool(
+            platform_store.list_model_eval_suite_cases, project_id, versions[0]["id"], 5000
+        )
+        context = identity_context(request)
+        created = await run_in_threadpool(
+            platform_store.save_model_eval_suite,
+            project_id,
+            {
+                "source": "project_custom",
+                "name": payload.name.strip() or f"{source['name']}（项目副本）",
+                "category": source.get("category") or "custom",
+                "description": f"复制自 {source['name']}，可发布新版本。",
+                "status": "draft",
+            },
+            "",
+            created_by=str((context.get("user") or {}).get("id") or ""),
+        )
+        version = await run_in_threadpool(
+            platform_store.publish_model_eval_suite_version,
+            project_id,
+            created["id"],
+            {**dict(versions[0].get("manifest") or {}), "cloned_from": suite_id},
+            cases,
+            upstream={"cloned_suite_id": suite_id, "cloned_version_id": versions[0]["id"]},
+        )
+        audit_evaluation_change(
+            request,
+            "model_evaluation.suite.clone",
+            "model_eval_suite",
+            created["id"],
+            {"source_suite_id": suite_id, "case_count": len(cases)},
+        )
+        return {"suite": created, "version": version}
+
+    @router.post("/model-evaluation/suites/{suite_id}/validate")
+    async def validate_model_evaluation_suite(
+        suite_id: str, payload: ModelEvaluationSuiteVersionInput, request: Request
+    ):
+        suite = await run_in_threadpool(
+            platform_store.get_model_eval_suite, current_project_id(request), suite_id
+        )
+        if not suite:
+            raise HTTPException(status_code=404, detail="evaluation suite not found")
+        return validate_evaluation_cases(payload.cases)
+
+    @router.post("/model-evaluation/suites/{suite_id}/versions", status_code=201)
+    async def publish_model_evaluation_suite_version(
+        suite_id: str, payload: ModelEvaluationSuiteVersionInput, request: Request
+    ):
+        project_id = current_project_id(request)
+        suite = await run_in_threadpool(
+            platform_store.get_model_eval_suite, project_id, suite_id, include_global=False
+        )
+        if not suite:
+            raise HTTPException(status_code=404, detail="project evaluation suite not found")
+        validation = validate_evaluation_cases(payload.cases)
+        if not validation["valid"]:
+            raise HTTPException(status_code=400, detail="；".join(validation["errors"]))
+        version = await run_in_threadpool(
+            platform_store.publish_model_eval_suite_version,
+            project_id,
+            suite_id,
+            {"schema_version": "1.0", "license": "project_authorized", **payload.manifest},
+            payload.cases,
+            upstream={"source": "project_upload"},
+        )
+        audit_evaluation_change(
+            request,
+            "model_evaluation.suite.publish",
+            "model_eval_suite_version",
+            version["id"],
+            {"suite_id": suite_id, "case_count": validation["total"]},
+        )
+        return {"version": version, "validation": validation}
+
+    @router.post("/model-evaluation/suites/{suite_id}/import", status_code=201)
+    async def import_model_evaluation_suite(
+        suite_id: str, request: Request
+    ):
+        project_id = current_project_id(request)
+        suite = await run_in_threadpool(
+            platform_store.get_model_eval_suite, project_id, suite_id, include_global=False
+        )
+        if not suite:
+            raise HTTPException(status_code=404, detail="project evaluation suite not found")
+        form = await request.form(max_files=1)
+        upload = form.get("file")
+        if not isinstance(upload, UploadFile):
+            raise HTTPException(status_code=400, detail="请选择要导入的素材文件")
+        content = await upload.read(20 * 1024 * 1024 + 1)
+        await upload.close()
+        try:
+            cases = await run_in_threadpool(
+                parse_evaluation_import, upload.filename or "upload", content
+            )
+        except (ValueError, OSError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        validation = validate_evaluation_cases(cases)
+        if not validation["valid"]:
+            raise HTTPException(status_code=400, detail="；".join(validation["errors"]))
+        version = await run_in_threadpool(
+            platform_store.publish_model_eval_suite_version,
+            project_id,
+            suite_id,
+            {
+                "schema_version": "1.0",
+                "license": "project_authorized",
+                "import_format": Path(upload.filename or "upload").suffix.lower(),
+                "original_filename": Path(upload.filename or "upload").name,
+            },
+            cases,
+            upstream={"source": "project_upload"},
+        )
+        audit_evaluation_change(
+            request,
+            "model_evaluation.suite.import",
+            "model_eval_suite_version",
+            version["id"],
+            {"suite_id": suite_id, "case_count": len(cases), "filename": Path(upload.filename or "upload").name},
+        )
+        return {"version": version, "validation": validation, "preview": cases[:20]}
 
     @router.get("/model-evaluation/suites/{suite_id}/versions/{version_id}")
     async def get_model_evaluation_suite_version(
@@ -1436,16 +1700,31 @@ def create_platform_api(
         if payload.plan not in PLAN_CONFIGS:
             raise HTTPException(status_code=400, detail="不支持的模型评测方案")
         try:
-            suite, version, cases = await run_in_threadpool(
-                latest_suite_for_run_kind,
-                platform_store,
-                project_id,
-                payload.run_kind,
-            )
+            if payload.run_kind == "custom":
+                if not payload.suite_version_id:
+                    raise ValueError("项目自定义评测必须选择已发布测试集版本")
+                version = await run_in_threadpool(
+                    platform_store.get_model_eval_suite_version, project_id, payload.suite_version_id
+                )
+                if not version or not version.get("project_id"):
+                    raise ValueError("只能直接执行当前项目发布的自定义测试集")
+                suite = await run_in_threadpool(
+                    platform_store.get_model_eval_suite, project_id, version["suite_id"], include_global=False
+                )
+                cases = await run_in_threadpool(
+                    platform_store.list_model_eval_suite_cases, project_id, version["id"], 5000
+                )
+            else:
+                suite, version, cases = await run_in_threadpool(
+                    latest_suite_for_run_kind,
+                    platform_store,
+                    project_id,
+                    payload.run_kind,
+                )
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         profile = None
-        if payload.run_kind != "mock":
+        if payload.run_kind not in {"mock", "mock_full"}:
             if not payload.model_profile_id:
                 raise HTTPException(status_code=400, detail="请选择已配置的被测模型")
             profile = await run_in_threadpool(
@@ -1455,6 +1734,31 @@ def create_platform_api(
                 raise HTTPException(status_code=404, detail="model profile not found")
             if str(profile.get("provider") or "") != "openai-compatible":
                 raise HTTPException(status_code=409, detail="首版评测只支持 OpenAI Compatible 模型")
+        judge_profile = None
+        if payload.judge_model_profile_id:
+            if payload.judge_model_profile_id == payload.model_profile_id:
+                raise HTTPException(status_code=400, detail="裁判模型必须独立于被测模型")
+            judge_profile = await run_in_threadpool(
+                platform_store.get_model_profile, payload.judge_model_profile_id
+            )
+            if not judge_profile:
+                raise HTTPException(status_code=404, detail="judge model profile not found")
+            if str(judge_profile.get("provider") or "") != "openai-compatible":
+                raise HTTPException(status_code=409, detail="裁判模型必须使用 OpenAI Compatible 协议")
+        resource_binding = {}
+        if payload.server_session_id:
+            session = get_visible_server_session(payload.server_session_id, request)
+            metric_payload = await run_in_threadpool(
+                server_session_manager.metrics, payload.server_session_id, 0, 5000
+            )
+            latest_metric = (metric_payload.get("metrics") or [])[-1:] or []
+            resource_binding = {
+                "server_session_id": payload.server_session_id,
+                "server_name": str(session.get("name") or session.get("host") or "关联服务器"),
+                "baseline_sample": (latest_metric[0].get("data") if latest_metric else {}),
+                "baseline_sample_at": (latest_metric[0].get("created_at") if latest_metric else None),
+                "scope": "submission_baseline",
+            }
         try:
             backend, backend_version, mode, task_config = build_task_configuration(
                 run_kind=payload.run_kind,
@@ -1464,9 +1768,11 @@ def create_platform_api(
                 stream=payload.stream,
                 max_tokens=payload.max_tokens,
                 timeout=payload.timeout_seconds,
+                judge_profile=judge_profile,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        task_config["manual_review_percent"] = payload.manual_review_percent
         model_snapshot = (
             {
                 "id": str(profile.get("id") or ""),
@@ -1479,7 +1785,7 @@ def create_platform_api(
             else {"name": "Deterministic Mock", "provider": "mock"}
         )
         snapshot = {
-            "schema_version": "1.0",
+            "schema_version": "2.0",
             "run_kind": payload.run_kind,
             "plan": payload.plan,
             "mode": mode,
@@ -1497,7 +1803,19 @@ def create_platform_api(
                 "stream": payload.stream,
                 "max_tokens": payload.max_tokens,
                 "timeout_seconds": payload.timeout_seconds,
+                "manual_review_percent": payload.manual_review_percent,
             },
+            "judge": (
+                {
+                    "id": str(judge_profile.get("id") or ""),
+                    "name": str(judge_profile.get("name") or ""),
+                    "provider": str(judge_profile.get("provider") or ""),
+                    "model_name": str(judge_profile.get("model_name") or ""),
+                }
+                if judge_profile
+                else {"status": "not_configured"}
+            ),
+            "resource_binding": resource_binding,
             "task_config": task_config,
         }
         context = identity_context(request)
@@ -1510,6 +1828,19 @@ def create_platform_api(
             backend=backend,
             backend_version=backend_version,
             created_by=str((context.get("user") or {}).get("id") or ""),
+        )
+        audit_evaluation_change(
+            request,
+            "model_evaluation.run.submit",
+            "model_eval_run",
+            run["id"],
+            {
+                "run_kind": payload.run_kind,
+                "plan": payload.plan,
+                "suite_version_id": version["id"],
+                "judge_configured": bool(judge_profile),
+                "resource_bound": bool(resource_binding),
+            },
         )
         return run
 
@@ -1580,6 +1911,170 @@ def create_platform_api(
             "total_pages": max(1, (total + page_size - 1) // page_size),
         }
 
+    @router.get("/model-evaluation/runs/{run_id}/reviews")
+    async def list_model_evaluation_reviews(
+        run_id: str, request: Request, result_id: str = Query(default="", max_length=64)
+    ):
+        project_id = current_project_id(request)
+        run = await run_in_threadpool(platform_store.get_model_eval_run, project_id, run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="evaluation run not found")
+        reviews = await run_in_threadpool(
+            platform_store.list_model_eval_manual_reviews, project_id, run_id, result_id
+        )
+        return {"reviews": reviews}
+
+    @router.post("/model-evaluation/runs/{run_id}/results/{result_id}/reviews", status_code=201)
+    async def create_model_evaluation_review(
+        run_id: str,
+        result_id: str,
+        payload: ModelEvaluationManualReviewInput,
+        request: Request,
+    ):
+        project_id = current_project_id(request)
+        run = await run_in_threadpool(platform_store.get_model_eval_run, project_id, run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="evaluation run not found")
+        if str(run.get("status") or "") not in {"completed", "failed", "stopped"}:
+            raise HTTPException(status_code=409, detail="任务结束后才能人工复核")
+        context = identity_context(request)
+        try:
+            review = await run_in_threadpool(
+                platform_store.save_model_eval_manual_review,
+                project_id,
+                run_id,
+                result_id,
+                reviewer_id=str((context.get("user") or {}).get("id") or ""),
+                score={
+                    "score": payload.score / 100.0,
+                    "rubric": {key: max(0.0, min(float(value), 100.0)) / 100.0 for key, value in payload.rubric.items()},
+                    "source": "human",
+                },
+                comment=payload.comment,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="evaluation result not found") from exc
+        audit_evaluation_change(
+            request,
+            "model_evaluation.review.create",
+            "model_eval_manual_review",
+            review["id"],
+            {"run_id": run_id, "result_id": result_id, "score": payload.score},
+        )
+        return review
+
+    @router.post("/model-evaluation/comparisons", status_code=201)
+    async def create_model_evaluation_comparison(
+        payload: ModelEvaluationComparisonInput, request: Request
+    ):
+        project_id = current_project_id(request)
+        runs = []
+        for run_id in list(dict.fromkeys(payload.run_ids)):
+            run = await run_in_threadpool(platform_store.get_model_eval_run, project_id, run_id)
+            if not run:
+                raise HTTPException(status_code=404, detail="evaluation run not found")
+            if str(run.get("status") or "") not in {"completed", "failed", "stopped"}:
+                raise HTTPException(status_code=409, detail="只能对比已结束的评测运行")
+            runs.append(run)
+        try:
+            result = build_run_comparison(runs)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not result["comparable"] and not payload.allow_mismatch:
+            raise HTTPException(
+                status_code=409,
+                detail="运行口径不同：" + "、".join(result["mismatches"]) + "。确认后可仅并列展示。",
+            )
+        context = identity_context(request)
+        comparison = await run_in_threadpool(
+            platform_store.create_model_eval_comparison,
+            project_id,
+            [run["id"] for run in runs],
+            {"allow_mismatch": payload.allow_mismatch, "result": result},
+            created_by=str((context.get("user") or {}).get("id") or ""),
+        )
+        audit_evaluation_change(
+            request,
+            "model_evaluation.comparison.create",
+            "model_eval_comparison",
+            comparison["id"],
+            {"run_count": len(runs), "comparable": result["comparable"]},
+        )
+        return {"comparison": comparison, "result": result}
+
+    @router.get("/model-evaluation/comparisons")
+    async def list_model_evaluation_comparisons(
+        request: Request, limit: int = Query(default=100, ge=1, le=500)
+    ):
+        project_id = current_project_id(request)
+        comparisons = await run_in_threadpool(
+            platform_store.list_model_eval_comparisons, project_id, limit
+        )
+        return {"comparisons": comparisons}
+
+    @router.get("/model-evaluation/comparisons/{comparison_id}")
+    async def get_model_evaluation_comparison(comparison_id: str, request: Request):
+        comparison = await run_in_threadpool(
+            platform_store.get_model_eval_comparison,
+            current_project_id(request),
+            comparison_id,
+        )
+        if not comparison:
+            raise HTTPException(status_code=404, detail="evaluation comparison not found")
+        return {"comparison": comparison, "result": (comparison.get("config") or {}).get("result") or {}}
+
+    @router.get("/model-evaluation/runs/{run_id}/report")
+    async def get_model_evaluation_report(run_id: str, request: Request):
+        try:
+            generated = await run_in_threadpool(
+                ensure_model_evaluation_report,
+                current_project_id(request),
+                run_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="evaluation run not found") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=500, detail="评测报告生成失败") from exc
+        return {
+            "report": generated["report"],
+            "downloads": {
+                "docx": "model_evaluation_report.docx",
+                "pdf": "model_evaluation_report.pdf",
+            },
+        }
+
+    @router.get("/model-evaluation/runs/{run_id}/report/{report_format}")
+    async def download_model_evaluation_report(
+        run_id: str, report_format: str, request: Request
+    ):
+        normalized_format = str(report_format or "").lower()
+        if normalized_format not in {"docx", "pdf"}:
+            raise HTTPException(status_code=400, detail="不支持的评测报告格式")
+        try:
+            generated = await run_in_threadpool(
+                ensure_model_evaluation_report,
+                current_project_id(request),
+                run_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="evaluation run not found") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=500, detail="评测报告生成失败") from exc
+        path = generated[f"{normalized_format}_path"]
+        media_type = {
+            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "pdf": "application/pdf",
+        }[normalized_format]
+        return FileResponse(
+            str(path),
+            media_type=media_type,
+            filename=f"{generated['report']['report_number']}_模型评测报告.{normalized_format}",
+        )
+
     @router.post("/model-evaluation/runs/{run_id}/stop")
     async def stop_model_evaluation_run(run_id: str, request: Request):
         run = await run_in_threadpool(
@@ -1590,6 +2085,34 @@ def create_platform_api(
         if not run:
             raise HTTPException(status_code=404, detail="evaluation run not found")
         return run
+
+    @router.delete("/model-evaluation/runs/{run_id}")
+    async def delete_model_evaluation_run(run_id: str, request: Request):
+        project_id = current_project_id(request)
+        run = await run_in_threadpool(
+            platform_store.get_model_eval_run, project_id, run_id
+        )
+        if not run:
+            raise HTTPException(status_code=404, detail="evaluation run not found")
+        if str(run.get("status") or "") not in {"completed", "failed", "stopped"}:
+            raise HTTPException(status_code=409, detail="运行中的评测不能删除，请先停止任务")
+        artifact_ref = str(run.get("artifact_ref") or "")
+        if artifact_ref:
+            try:
+                await run_in_threadpool(artifact_storage.delete_tree, artifact_ref)
+            except (ValueError, OSError) as exc:
+                raise HTTPException(
+                    status_code=502, detail="评测产物清理失败，运行记录未删除"
+                ) from exc
+        try:
+            deleted = await run_in_threadpool(
+                platform_store.delete_model_eval_run, project_id, run_id
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if not deleted:
+            raise HTTPException(status_code=404, detail="evaluation run not found")
+        return {"success": True, "run_id": run_id}
 
     @router.get("/model-evaluation/runs/{run_id}/artifacts/{kind}")
     async def download_model_evaluation_artifact(

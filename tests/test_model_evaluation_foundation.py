@@ -11,7 +11,12 @@ from tests import bootstrap  # noqa: F401
 
 from auto_test.evaluation.backends.evalscope import EvalScopeBackend, EvalScopeRuntimeConfig
 from auto_test.evaluation.backends.mock import DeterministicMockBackend
-from auto_test.evaluation.contracts import BackendResult, EvaluationRequest, assert_secret_free
+from auto_test.evaluation.contracts import (
+    BackendEvent,
+    BackendResult,
+    EvaluationRequest,
+    assert_secret_free,
+)
 from auto_test.evaluation.manager import (
     ModelEvaluationManager,
     create_model_evaluation_backend_resolver,
@@ -201,6 +206,143 @@ class ModelEvaluationBackendTests(unittest.TestCase):
             self.assertEqual(finished["summary"]["passed_cases"], 2)
             self.assertTrue(Path(finished["artifact_ref"]).is_dir())
 
+    def test_manager_persists_live_case_and_summary_before_run_finishes(self):
+        emitted = threading.Event()
+        release = threading.Event()
+        case_result = {
+            "case_id": "live-one",
+            "status": "passed",
+            "attempt": 1,
+            "metrics": {
+                "latency_ms": 12.0,
+                "ttft_ms": 4.0,
+                "total_tokens": 9,
+                "token_source": "api_usage",
+            },
+            "score": {"score": 1.0, "passed": True},
+        }
+        partial_summary = {
+            "completed_cases": 1,
+            "passed_cases": 1,
+            "success_rate": 100.0,
+            "quality_score": 100.0,
+            "token_usage": {"total_tokens": 9, "source_counts": {"api_usage": 1}},
+            "performance": {"latency_p95_ms": 12.0},
+        }
+
+        class StreamingBackend:
+            name = "streaming"
+            version = "test"
+
+            def run(self, request, *, on_event=None, should_stop=None):
+                request.work_dir.mkdir(parents=True, exist_ok=True)
+                on_event(
+                    BackendEvent(
+                        event_type="progress",
+                        message="用例 1/2 完成",
+                        phase="running",
+                        progress=50,
+                        data={
+                            "completed": 1,
+                            "total": 2,
+                            "case_result": case_result,
+                            "partial_summary": partial_summary,
+                        },
+                    )
+                )
+                emitted.set()
+                release.wait(2)
+                return BackendResult(
+                    status="completed",
+                    summary=partial_summary,
+                    raw={"cases": [case_result]},
+                )
+
+            def stop(self, _run_id):
+                release.set()
+                return True
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = PlatformStore(root / "platform.db", recover_jobs=False)
+            project = store.create_project("LIVE", "Live results")
+            manager = ModelEvaluationManager(
+                store,
+                LocalArtifactStorage(root / "artifacts"),
+                lambda _run: StreamingBackend(),
+            )
+            queued = manager.submit(
+                project["id"],
+                snapshot={"mode": "mock", "task_config": {"cases": [{"id": "live-one"}]}},
+            )
+            runner = threading.Thread(target=manager.run_once)
+            runner.start()
+            self.assertTrue(emitted.wait(1))
+
+            live_results, total = store.list_model_eval_case_results(
+                project["id"], queued["id"]
+            )
+            live_run = store.get_model_eval_run(project["id"], queued["id"])
+            persisted_events = store.list_model_eval_run_events(project["id"], queued["id"])
+
+            self.assertEqual(total, 1)
+            self.assertEqual(live_results[0]["metrics"]["total_tokens"], 9)
+            self.assertEqual(live_run["summary"]["completed_cases"], 1)
+            self.assertEqual(live_run["summary"]["success_rate"], 100.0)
+            self.assertNotIn("case_result", json.dumps(persisted_events))
+            self.assertNotIn("partial_summary", json.dumps(persisted_events))
+            self.assertTrue(runner.is_alive())
+
+            release.set()
+            runner.join(2)
+            self.assertFalse(runner.is_alive())
+
+    def test_manager_keeps_partial_summary_when_backend_fails(self):
+        class FailingAfterProgressBackend:
+            name = "failing-after-progress"
+            version = "test"
+
+            def run(self, request, *, on_event=None, should_stop=None):
+                on_event(
+                    BackendEvent(
+                        event_type="progress",
+                        message="用例 1/2 完成",
+                        phase="running",
+                        progress=50,
+                        data={
+                            "partial_summary": {
+                                "completed_cases": 1,
+                                "success_rate": 100.0,
+                                "token_usage": {"total_tokens": 7},
+                            }
+                        },
+                    )
+                )
+                raise RuntimeError("simulated backend failure")
+
+            def stop(self, _run_id):
+                return True
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = PlatformStore(root / "platform.db", recover_jobs=False)
+            project = store.create_project("PARTIAL", "Partial summary")
+            manager = ModelEvaluationManager(
+                store,
+                LocalArtifactStorage(root / "artifacts"),
+                lambda _run: FailingAfterProgressBackend(),
+            )
+            manager.submit(
+                project["id"],
+                snapshot={"mode": "mock", "task_config": {}},
+            )
+
+            failed = manager.run_once()
+
+            self.assertEqual(failed["status"], "failed")
+            self.assertEqual(failed["summary"]["completed_cases"], 1)
+            self.assertEqual(failed["summary"]["token_usage"]["total_tokens"], 7)
+
     def test_manager_resolves_api_key_from_environment_only_at_runtime(self):
         class CapturingBackend:
             name = "capture"
@@ -272,6 +414,38 @@ class ModelEvaluationBackendTests(unittest.TestCase):
 
             self.assertEqual(finished["status"], "failed")
             self.assertIn("RuntimeError", finished["error"])
+
+    def test_isolated_subprocess_preserves_chinese_event_messages(self):
+        source_root = Path(__file__).resolve().parents[1] / "src"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            backend = EvalScopeBackend(
+                EvalScopeRuntimeConfig(
+                    python_executable=Path(sys.executable),
+                    version="test",
+                    source_root=source_root,
+                )
+            )
+            request = EvaluationRequest(
+                run_id="unicode-event-run",
+                project_id="project-a",
+                mode="mock",
+                task_config={},
+                work_dir=root,
+            )
+            events: list[BackendEvent] = []
+
+            with patch.dict(
+                "os.environ",
+                {"PYTHONIOENCODING": "gbk", "PYTHONUTF8": "0"},
+            ):
+                result = backend.run(request, on_event=events.append)
+
+            messages = [event.message for event in events]
+            self.assertEqual(result.status, "completed")
+            self.assertIn("隔离 Mock 运行已启动", messages)
+            self.assertIn("隔离评测执行完成", messages)
+            self.assertNotIn("\ufffd", "".join(messages))
 
     def test_isolated_subprocess_runs_and_stops_without_leaking_secret(self):
         source_root = Path(__file__).resolve().parents[1] / "src"

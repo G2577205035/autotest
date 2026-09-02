@@ -196,6 +196,169 @@ PERF_CASES: tuple[dict[str, Any], ...] = tuple(
 )
 
 
+def _translation_cases() -> tuple[dict[str, Any], ...]:
+    """Build a versioned 200-case bilingual synthetic pack without external data."""
+
+    cases: list[dict[str, Any]] = []
+    for index in range(1, 101):
+        month = (index - 1) % 12 + 1
+        day = (index - 1) % 28 + 1
+        amount = 1200 + index
+        case_code = f"[CASE-{index:03d}]"
+        source = (
+            f"北辰研究院计划于 2026-{month:02d}-{day:02d} 发布第 {index} 批测试结果，"
+            f"预算为 {amount} 万元。请保留 {case_code} 和 {{{{owner}}}}，并使用正式报告文体。"
+        )
+        target = (
+            f"The Beichen Research Institute plans to release batch {index} of the test results on "
+            f"2026-{month:02d}-{day:02d}, with a budget of RMB {amount * 10_000}. "
+            f"Keep {case_code} and {{{{owner}}}}, and use a formal report style."
+        )
+        cases.append(
+            {
+                "case_key": f"translation-zh-en-{index:03d}",
+                "category": "translation_zh_en",
+                "tags": ["builtin", "translation", "zh-en", "entity", "number", "format"],
+                "payload": {
+                    "name": f"中译英：实体、数字与占位符 {index:03d}",
+                    "source_language": "zh-CN",
+                    "target_language": "en",
+                    "messages": [{"role": "user", "content": "将以下内容翻译成英文，只输出译文：\n" + source}],
+                    "references": [target],
+                    "mock_response": target,
+                    "rules": {
+                        "required_terms": ["Beichen Research Institute", "formal report"],
+                        "required_numbers": [str(index), f"2026-{month:02d}-{day:02d}", str(amount * 10_000)],
+                        "protected_spans": [case_code, "{{owner}}"],
+                        "references": [target],
+                        "min_reference_similarity": 0.45,
+                    },
+                    "rubric": ["忠实度与完整性", "术语与实体准确性", "流畅度", "格式和数字保持"],
+                },
+            }
+        )
+    for index in range(1, 101):
+        month = (index + 5) % 12 + 1
+        day = (index + 7) % 28 + 1
+        percent = 80 + index % 20
+        case_code = f"[NOTICE-{index:03d}]"
+        source = (
+            f"Atlas Operations Center confirmed that acceptance round {index} will start on "
+            f"2026-{month:02d}-{day:02d}. The target pass rate is {percent}%. "
+            f"Keep {case_code} and `status=ready` unchanged."
+        )
+        target = (
+            f"阿特拉斯运营中心确认，第 {index} 轮验收将于 2026-{month:02d}-{day:02d} 开始，"
+            f"目标通过率为 {percent}%。请原样保留 {case_code} 和 `status=ready`。"
+        )
+        cases.append(
+            {
+                "case_key": f"translation-en-zh-{index:03d}",
+                "category": "translation_en_zh",
+                "tags": ["builtin", "translation", "en-zh", "entity", "number", "format"],
+                "payload": {
+                    "name": f"英译中：实体、百分比与代码片段 {index:03d}",
+                    "source_language": "en",
+                    "target_language": "zh-CN",
+                    "messages": [{"role": "user", "content": "将以下内容翻译成简体中文，只输出译文：\n" + source}],
+                    "references": [target],
+                    "mock_response": target,
+                    "rules": {
+                        "required_terms": ["阿特拉斯运营中心", "目标通过率"],
+                        "required_numbers": [str(index), f"2026-{month:02d}-{day:02d}", f"{percent}%"],
+                        "protected_spans": [case_code, "`status=ready`"],
+                        "references": [target],
+                        "min_reference_similarity": 0.45,
+                    },
+                    "rubric": ["忠实度与完整性", "术语与实体准确性", "流畅度", "格式和数字保持"],
+                },
+            }
+        )
+    return tuple(cases)
+
+
+TRANSLATION_CASES = _translation_cases()
+
+
+WMT_CASES: tuple[dict[str, Any], ...] = (
+    {"case_key": "wmt-en-zh-01", "category": "wmt24pp", "payload": {"source": "Hello", "target": "你好", "language_pair": "en-zh_cn"}},
+    {"case_key": "wmt-en-zh-02", "category": "wmt24pp", "payload": {"source": "The service is available.", "target": "服务可用。", "language_pair": "en-zh_cn"}},
+    {"case_key": "wmt-en-zh-03", "category": "wmt24pp", "payload": {"source": "Please verify the report before release.", "target": "请在发布前核验报告。", "language_pair": "en-zh_cn"}},
+    {"case_key": "wmt-en-zh-04", "category": "wmt24pp", "payload": {"source": "The test completed without errors.", "target": "测试已完成且没有错误。", "language_pair": "en-zh_cn"}},
+)
+
+
+REPORT_WRITING_CASES: tuple[dict[str, Any], ...] = tuple(
+    {
+        "case_key": f"report-writing-{index:02d}",
+        "category": "report_writing",
+        "tags": ["builtin", "report_writing", "grounded"],
+        "payload": {
+            "name": f"报告写作材料包 {index:02d}",
+            "messages": [{"role": "user", "content": (
+                f"材料：2026-09-{index:02d}，北辰系统第 {index} 轮验收共执行 20 项，"
+                f"通过 {18 + index % 2} 项，失败 {2 - index % 2} 项；失败均来自导出超时。"
+                "请写一份包含“事实摘要、风险判断、改进建议”的简明专项报告，严禁虚构材料外数字。"
+            )}],
+            "mock_response": (
+                f"## 事实摘要\n2026-09-{index:02d}，北辰系统第 {index} 轮验收执行 20 项，"
+                f"通过 {18 + index % 2} 项，失败 {2 - index % 2} 项，失败均来自导出超时。\n"
+                "## 风险判断\n事实显示导出链路存在稳定性风险；其他风险暂无材料支持。\n"
+                "## 改进建议\n复核导出超时日志并在修复后重跑失败项。"
+            ),
+            "rules": {
+                "required_sections": ["事实摘要", "风险判断", "改进建议"],
+                "required_facts": ["北辰系统", "20 项", "导出超时"],
+                "forbidden_terms": ["数据库损坏", "网络攻击"],
+                "min_chars": 100,
+            },
+            "rubric": ["事实覆盖率", "无依据事实比例", "章节结构", "事实与推断区分", "建议可执行性"],
+        },
+    }
+    for index in range(1, 9)
+)
+
+
+INTELLIGENCE_CASES: tuple[dict[str, Any], ...] = tuple(
+    {
+        "case_key": f"intelligence-{index:02d}",
+        "category": "intelligence",
+        "tags": ["builtin", "intelligence", "source_mapping", "timeline"],
+        "payload": {
+            "name": f"多来源情报研判 {index:02d}",
+            "messages": [{"role": "user", "content": (
+                f"来源A：2026-08-{index:02d} 09:00，苍穹服务出现延迟升高。\n"
+                f"来源B：2026-08-{index:02d} 09:15，监控显示请求量翻倍，但错误率保持 0.2%。\n"
+                f"来源C：2026-08-{index:02d} 10:00，扩容后延迟恢复。\n"
+                "请形成包含时间线、证据映射、矛盾/不确定性和建议的情报快报，不得虚构来源。"
+            )}],
+            "mock_response": (
+                f"## 时间线\n- 09:00 延迟升高（来源A）\n- 09:15 请求量翻倍且错误率 0.2%（来源B）\n"
+                "- 10:00 扩容后延迟恢复（来源C）\n## 证据映射\n现象、负载和恢复分别由来源A、B、C支持。\n"
+                "## 矛盾与不确定性\n材料无直接矛盾，但尚不能证明请求量增长是唯一原因。\n"
+                "## 建议\n继续观察容量水位并复核同时间窗资源指标。"
+            ),
+            "rules": {
+                "required_sections": ["时间线", "证据映射", "矛盾与不确定性", "建议"],
+                "required_facts": ["09:00", "09:15", "10:00", "0.2%", "来源A", "来源B", "来源C"],
+                "forbidden_terms": ["来源D", "已经证实"],
+                "min_chars": 120,
+            },
+            "rubric": ["实体事件准确率", "时间线准确率", "来源映射", "矛盾识别", "不确定性表达", "建议可执行性"],
+        },
+    }
+    for index in range(1, 9)
+)
+
+
+ADVANCED_ACCEPTANCE_CASES: tuple[dict[str, Any], ...] = (
+    *TRANSLATION_CASES[:4],
+    *TRANSLATION_CASES[100:104],
+    *REPORT_WRITING_CASES,
+    *INTELLIGENCE_CASES,
+)
+
+
 BUILTIN_SUITES: tuple[dict[str, Any], ...] = (
     {
         "id": "builtin-core-mvp",
@@ -254,14 +417,83 @@ BUILTIN_SUITES: tuple[dict[str, Any], ...] = (
         },
         "cases": PERF_CASES,
     },
+    {
+        "id": "builtin-translation-zh-en-v1",
+        "source": "platform_builtin",
+        "name": "中英双向翻译专项（200 条）",
+        "category": "translation",
+        "description": "平台合成双向翻译用例，覆盖术语、实体、数字、格式、占位符和多参考规则。",
+        "manifest": {
+            "schema_version": "1.0",
+            "license": "platform_synthetic",
+            "scoring_version": "translation-rules-1.0",
+            "language_pairs": ["zh-CN-en", "en-zh-CN"],
+            "case_target": 200,
+        },
+        "upstream": {},
+        "cases": TRANSLATION_CASES,
+    },
+    {
+        "id": "evalscope-wmt24pp-en-zh-v1",
+        "source": "evalscope_standard",
+        "name": "EvalScope WMT2024++ 英译中离线样例",
+        "category": "wmt_translation",
+        "description": "固定 EvalScope 1.11.1 与本地 en-zh_cn 数据，使用 BLEU-1 验证标准翻译链路。",
+        "manifest": {
+            "schema_version": "1.0",
+            "license": "platform_synthetic",
+            "benchmark": "wmt24pp",
+            "subset": "en-zh_cn",
+            "evalscope_version": "1.11.1",
+            "offline_required": True,
+        },
+        "upstream": {"framework": "EvalScope", "framework_version": "1.11.1", "benchmark": "wmt24pp", "dataset_license": "platform_synthetic"},
+        "cases": WMT_CASES,
+    },
+    {
+        "id": "builtin-report-writing-v1",
+        "source": "platform_builtin",
+        "name": "报告写作能力材料包（8 套）",
+        "category": "report_writing",
+        "description": "虚构专项材料，覆盖事实、风险、建议、结构遵循和禁止虚构。",
+        "manifest": {"schema_version": "1.0", "license": "platform_synthetic", "scoring_version": "rubric-rules-1.0"},
+        "upstream": {},
+        "cases": REPORT_WRITING_CASES,
+    },
+    {
+        "id": "builtin-intelligence-v1",
+        "source": "platform_builtin",
+        "name": "情报生产能力材料包（8 套）",
+        "category": "intelligence",
+        "description": "虚构多来源材料，覆盖时间线、来源映射、矛盾与不确定性。",
+        "manifest": {"schema_version": "1.0", "license": "platform_synthetic", "scoring_version": "rubric-rules-1.0"},
+        "upstream": {},
+        "cases": INTELLIGENCE_CASES,
+    },
+    {
+        "id": "builtin-advanced-acceptance-v1",
+        "source": "platform_builtin",
+        "name": "完整进阶能力流程验收",
+        "category": "advanced_acceptance",
+        "description": "无需真实模型即可验收翻译、报告写作、情报和评分状态的确定性流程。",
+        "manifest": {"schema_version": "1.0", "license": "platform_synthetic", "scoring_version": "advanced-1.0"},
+        "upstream": {},
+        "cases": ADVANCED_ACCEPTANCE_CASES,
+    },
 )
 
 
 RUN_KIND_SUITE_IDS = {
     "mock": "builtin-core-mvp",
+    "mock_full": "builtin-advanced-acceptance-v1",
     "foundation": "builtin-core-mvp",
     "standard_benchmark": "evalscope-general-qa-mvp",
     "concurrency": "builtin-perf-prompts-mvp",
+    "deep_performance": "builtin-perf-prompts-mvp",
+    "translation": "builtin-translation-zh-en-v1",
+    "wmt_translation": "evalscope-wmt24pp-en-zh-v1",
+    "report_writing": "builtin-report-writing-v1",
+    "intelligence": "builtin-intelligence-v1",
 }
 _SEED_LOCK = threading.Lock()
 
@@ -305,6 +537,7 @@ def ensure_builtin_evaluation_suites(
                     [dict(item) for item in definition["cases"]],
                     upstream=dict(definition["upstream"]),
                 )
+            suite = store.get_model_eval_suite("", suite["id"], include_global=True) or suite
             published.append({**suite, "latest_version": latest})
         return published
 

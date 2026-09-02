@@ -223,6 +223,7 @@ class PlatformRepository(Protocol):
         phase: str | None = None,
         progress: int | None = None,
         message: str | None = None,
+        summary: dict[str, Any] | None = None,
     ) -> None: ...
     def add_model_eval_run_event(
         self,
@@ -251,9 +252,15 @@ class PlatformRepository(Protocol):
     def get_model_eval_run(
         self, project_id: str, run_id: str
     ) -> dict[str, Any] | None: ...
+    def set_model_eval_run_artifact_ref(
+        self, project_id: str, run_id: str, artifact_ref: str
+    ) -> dict[str, Any] | None: ...
     def list_model_eval_runs(
         self, project_id: str, limit: int = 100
     ) -> list[dict[str, Any]]: ...
+    def delete_model_eval_run(
+        self, project_id: str, run_id: str
+    ) -> dict[str, Any] | None: ...
     def list_model_eval_run_events(
         self, project_id: str, run_id: str, after_id: int = 0, limit: int = 1000
     ) -> list[dict[str, Any]]: ...
@@ -269,3 +276,30 @@ class PlatformRepository(Protocol):
         limit: int = 100,
         status: str = "",
     ) -> tuple[list[dict[str, Any]], int]: ...
+    def save_model_eval_manual_review(
+        self,
+        project_id: str,
+        run_id: str,
+        result_id: str,
+        *,
+        reviewer_id: str,
+        score: dict[str, Any],
+        comment: str = "",
+    ) -> dict[str, Any]: ...
+    def list_model_eval_manual_reviews(
+        self, project_id: str, run_id: str, result_id: str = ""
+    ) -> list[dict[str, Any]]: ...
+    def create_model_eval_comparison(
+        self,
+        project_id: str,
+        run_ids: list[str],
+        config: dict[str, Any],
+        *,
+        created_by: str = "",
+    ) -> dict[str, Any]: ...
+    def get_model_eval_comparison(
+        self, project_id: str, comparison_id: str
+    ) -> dict[str, Any] | None: ...
+    def list_model_eval_comparisons(
+        self, project_id: str, limit: int = 100
+    ) -> list[dict[str, Any]]: ...

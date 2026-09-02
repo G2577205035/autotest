@@ -5,12 +5,12 @@ const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selec
 const state = {
   bootstrap: null, runs: [], reports: [], models: [], interfaces: [], template: null, stressJobs: [],
   interfaceModules: [], interfaceEnvironments: [], interfaceVariables: [], interfaceScenarios: [], interfaceScenarioRuns: [], selectedInterfaceScenarioIds: [], selectedInterfaceModuleId: "",
-  identity: null, csrfToken: "", projectId: "", identityUsers: [], identityProjects: [], identityRoles: [], identityMembers: [], identityAudit: [], identityAuditPage: 1, identityAuditPageSize: 20, identityAuditTotal: 0, identityAuditTotalPages: 1,
+  identity: null, csrfToken: "", projectId: "", identityUsers: [], identityProjects: [], identityRoles: [], identityMembers: [], identityAudit: [], identityWorkspaceTab: "users", identityUsersPage: 1, identityProjectsPage: 1, identityRolesPage: 1, identityPageSize: 10, identityAuditPage: 1, identityAuditPageSize: 20, identityAuditTotal: 0, identityAuditTotalPages: 1,
   selectedRunId: "", monitorRunId: "", stressJobId: "", logCursor: {}, metricCursor: {}, stressMetricCursor: {}, logs: {}, metrics: {}, stressMetrics: {}, logFollow: {}, logScrollTop: {}, monitorRefreshInFlight: {},
   stressCapability: null, selectedGpuDevices: [], stressPreset: "quick", stressResourcesAutoOpened: false, expandedGpuIndex: null, gpuRenderContext: null,
   serverProfiles: [], serverSessions: [], serverSessionId: "", closingServerSessionId: "", serverSessionMetricCursor: {}, serverSessionMetrics: {},
   stressReportJobId: "", dashboardRunsSignature: "",
-  evaluationBootstrap: null, evaluationRuns: [], selectedEvaluationRunId: "", evaluationEvents: [], evaluationResults: [],
+  evaluationBootstrap: null, evaluationRuns: [], evaluationRunsSignature: "", evaluationRunsPage: 1, evaluationRunsPageSize: 7, selectedEvaluationRunId: "", evaluationEvents: [], evaluationResults: [], evaluationReport: null, evaluationReportRunId: "", evaluationReportCasesPage: 1, evaluationReportCasesPageSize: 8, evaluationSuites: [], evaluationComparisons: [], selectedEvaluationComparisonRunIds: [], evaluationComparisonResult: null,
   pollTimer: null
 };
 const titles = {dashboard:"运行总览","new-run":"发起测试",monitor:"实时监控",stress:"服务器性能",reports:"报告中心",evaluation:"模型评测",models:"模型配置",interfaces:"接口中心",identity:"用户、项目与权限"};
@@ -20,7 +20,7 @@ const subtitles = {
   monitor:"查看阶段进度、资源曲线与实时日志",
   stress:"服务器会话、实时状态、压测与性能报告",
   reports:"生成、管理与下载企业测试报告",
-  evaluation:"标准能力、Token、鲁棒性与推理并发评测",
+  evaluation:"翻译、报告、情报、Token、裁判复核、容量与模型对比",
   models:"安全维护报告生成模型",
   interfaces:"按项目管理接口、模块、环境、变量与不可变版本",
   identity:"管理业务项目、平台用户、项目成员角色与安全审计"
@@ -171,6 +171,11 @@ async function api(path, options) {
 function statusPill(status) {
   return '<span class="status ' + esc(status) + '">' + esc(statusNames[status] || status) + "</span>";
 }
+function evaluationCaseStatusPill(status) {
+  const labels={passed:"达标",failed:"未达标",error:"执行异常",completed:"已完成"};
+  const classes={passed:"passed",failed:"evaluation-not-met",error:"error",completed:"completed"};
+  return '<span class="status '+esc(classes[status]||"idle")+'">'+esc(labels[status]||status||"未知")+'</span>';
+}
 function openStressResourcesOnce() {
   if(state.stressResourcesAutoOpened) return;
   state.stressResourcesAutoOpened=true;
@@ -318,7 +323,7 @@ async function switchProject(projectId,returnView) {
   state.projectId=projectId;
   try {
     const identity=await api("/api/auth/status");
-    state.bootstrap=null;state.runs=[];state.reports=[];state.stressJobs=[];state.serverProfiles=[];state.serverSessions=[];state.serverSessionId="";state.selectedRunId="";state.monitorRunId="";state.stressJobId="";state.stressReportJobId="";state.dashboardRunsSignature="";state.logCursor={};state.metricCursor={};state.stressMetricCursor={};state.logs={};state.metrics={};state.stressMetrics={};state.interfaces=[];state.interfaceModules=[];state.interfaceEnvironments=[];state.interfaceVariables=[];state.interfaceScenarios=[];state.interfaceScenarioRuns=[];state.selectedInterfaceScenarioIds=[];state.selectedInterfaceModuleId="";state.evaluationBootstrap=null;state.evaluationRuns=[];state.selectedEvaluationRunId="";state.evaluationEvents=[];state.evaluationResults=[];
+    state.bootstrap=null;state.runs=[];state.reports=[];state.stressJobs=[];state.serverProfiles=[];state.serverSessions=[];state.serverSessionId="";state.selectedRunId="";state.monitorRunId="";state.stressJobId="";state.stressReportJobId="";state.dashboardRunsSignature="";state.logCursor={};state.metricCursor={};state.stressMetricCursor={};state.logs={};state.metrics={};state.stressMetrics={};state.interfaces=[];state.interfaceModules=[];state.interfaceEnvironments=[];state.interfaceVariables=[];state.interfaceScenarios=[];state.interfaceScenarioRuns=[];state.selectedInterfaceScenarioIds=[];state.selectedInterfaceModuleId="";state.evaluationBootstrap=null;state.evaluationRuns=[];state.evaluationRunsSignature="";state.evaluationRunsPage=1;state.selectedEvaluationRunId="";state.evaluationEvents=[];state.evaluationResults=[];state.evaluationReport=null;state.evaluationReportRunId="";state.evaluationReportCasesPage=1;
     await completeAuthentication(identity);
     gotoView(returnView || "dashboard");
     toast("已切换到项目："+(identity.current_project || {}).name);
@@ -1968,11 +1973,30 @@ async function downloadReport(jobId, format) {
     link.href=url; link.download="xiaoyi_enterprise_test_report."+format; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
   } catch (error) { toast("下载失败：" + error.message,true); }
 }
-const evaluationKindLabels={mock:"Mock 流程验证",foundation:"基础能力与鲁棒性",standard_benchmark:"标准 Benchmark",concurrency:"并发阶梯"};
+const evaluationKindLabels={mock:"Mock 流程验证",mock_full:"完整进阶流程验证",foundation:"基础能力与鲁棒性",translation:"中英双向翻译",wmt_translation:"WMT2024++ 标准翻译",report_writing:"报告写作能力",intelligence:"情报生产能力",standard_benchmark:"标准 Benchmark",concurrency:"并发阶梯",deep_performance:"深度性能与容量",custom:"项目自定义测试集"};
+const evaluationPlanLabels={quick:"快速体检",standard:"标准评测",deep:"深度评测"};
 const evaluationPhaseLabels={queued:"排队",preparing:"准备",running:"执行",scoring:"规则评分",reporting:"报告",completed:"完成",failed:"失败",stopped:"已停止",stop_requested:"安全停止中"};
 function evaluationActive(run){return Boolean(run&&["queued","preparing","running","scoring","reporting","stop_requested"].includes(run.status));}
+function evaluationTerminal(run){return Boolean(run&&["completed","failed","stopped"].includes(run.status));}
 function evaluationSnapshot(run){return run&&run.snapshot&&typeof run.snapshot==="object"?run.snapshot:{};}
 function evaluationNumber(value,digits){const number=Number(value);return Number.isFinite(number)?number.toFixed(digits==null?1:digits):"—";}
+function evaluationRunLabel(run){
+  const numeric=Number(run&&run.created_at);const date=Number.isFinite(numeric)?new Date(numeric<1e12?numeric*1000:numeric):null;
+  if(!date||Number.isNaN(date.getTime()))return "评测任务";
+  const pad=function(value){return String(value).padStart(2,"0");};
+  return "评测任务 "+date.getFullYear()+pad(date.getMonth()+1)+pad(date.getDate())+"-"+pad(date.getHours())+pad(date.getMinutes())+pad(date.getSeconds());
+}
+function evaluationCaseInfo(run,caseId,index){
+  const task=evaluationSnapshot(run).task_config||{};const cases=Array.isArray(task.cases)?task.cases:[];
+  const matched=cases.find(function(item){return String(item.id||item.case_id||item.case_key||"")===String(caseId||"");})||{};
+  const payload=matched.payload||{};const key=matched.case_key||matched.category||"";
+  const name=payload.name||payload.question||matched.name||("用例 "+String(index+1));
+  return {name:name,description:key||String(matched.category||"")};
+}
+function showEvaluationWorkspace(name){
+  activateWorkspaceTab("evaluation",name);
+  if(name==="detail"||name==="report")requestAnimationFrame(function(){const tabs=$("#evaluationWorkspaceTabs");if(tabs)tabs.scrollIntoView({block:"start",behavior:"smooth"});});
+}
 function evaluationKindInfo(kind){
   const catalog=(state.evaluationBootstrap&&state.evaluationBootstrap.run_kinds)||[];
   return catalog.find(function(item){return item.id===kind;})||{id:kind,label:evaluationKindLabels[kind]||kind,description:""};
@@ -1980,15 +2004,17 @@ function evaluationKindInfo(kind){
 function syncEvaluationForm(){
   const kind=$("#evaluationRunKind").value;
   const info=evaluationKindInfo(kind);
-  const mock=kind==="mock";
-  const requiresEvalScope=["standard_benchmark","concurrency"].includes(kind);
+  const mock=["mock","mock_full"].includes(kind);
+  const requiresEvalScope=["standard_benchmark","wmt_translation","concurrency","deep_performance"].includes(kind);
   const runtime=(state.evaluationBootstrap&&state.evaluationBootstrap.runtime)||{};
   $("#evaluationRunKindHint").textContent=info.description||"选择评测范围。";
   $("#evaluationModelProfile").disabled=mock;
   if(mock) $("#evaluationModelProfile").value="";
-  $("#evaluationSubmitNote").textContent=mock?"Mock 运行不产生真实模型负载。":requiresEvalScope?(runtime.evalscope_configured?"将使用锁定的 EvalScope "+runtime.evalscope_version+" 隔离运行；并发仅来自当前方案。":"尚未配置 EvalScope Python 3.11 运行时，标准/并发评测暂不可提交。"):("基础能力逐条低并发调用；最大输出 "+$("#evaluationMaxTokens").value+" Tokens。估算 Token 会明确标记，不作为精确验收值。");
+  $("#evaluationCustomSuiteField").classList.toggle("hidden",kind!=="custom");
+  $("#evaluationSubmitNote").textContent=mock?"Mock 运行不产生真实模型负载，可验收完整进阶流程。":requiresEvalScope?(runtime.evalscope_configured?"将使用锁定的 EvalScope "+runtime.evalscope_version+" 隔离运行；深度方案会记录固定 RPS、突发、持续和恢复观察配置。":"尚未配置 EvalScope Python 3.11 运行时，WMT、标准和性能评测暂不可提交。"):("专项能力逐条受控调用；规则、裁判和人工复核状态分开保存。最大输出 "+$("#evaluationMaxTokens").value+" Tokens。");
   const canOperate=hasPermission("evaluation:operate");
-  $("#evaluationSubmitButton").disabled=!canOperate||(requiresEvalScope&&!runtime.evalscope_configured);
+  const missingCustom=kind==="custom"&&!$("#evaluationSuiteVersion").value;
+  $("#evaluationSubmitButton").disabled=!canOperate||(requiresEvalScope&&!runtime.evalscope_configured)||missingCustom;
   if(!canOperate) $("#evaluationSubmitNote").textContent="当前项目角色可以查看评测结果，但不能发起或停止评测。";
 }
 function populateEvaluationModels(){
@@ -1997,6 +2023,68 @@ function populateEvaluationModels(){
   $("#evaluationModelProfile").innerHTML='<option value="">请选择模型配置</option>'+models.map(function(model){return '<option value="'+esc(model.id)+'">'+esc(model.name+" · "+model.model_name)+(model.has_api_key?"":" · 无鉴权")+'</option>';}).join("");
   if(models.some(function(model){return model.id===current;})) $("#evaluationModelProfile").value=current;
   else {const active=models.find(function(model){return model.is_active;});if(active)$("#evaluationModelProfile").value=active.id;}
+  const judgeCurrent=$("#evaluationJudgeProfile").value;
+  $("#evaluationJudgeProfile").innerHTML='<option value="">不使用裁判模型</option>'+models.map(function(model){return '<option value="'+esc(model.id)+'">'+esc(model.name+" · "+model.model_name)+'</option>';}).join("");
+  if(models.some(function(model){return model.id===judgeCurrent;}))$("#evaluationJudgeProfile").value=judgeCurrent;
+  const sessions=(state.evaluationBootstrap&&state.evaluationBootstrap.server_sessions)||[];
+  $("#evaluationServerSession").innerHTML='<option value="">不关联服务器资源</option>'+sessions.map(function(session){return '<option value="'+esc(session.id)+'">'+esc(session.name||session.host||"活动服务器")+'</option>';}).join("");
+}
+function populateEvaluationSuites(){
+  const suites=state.evaluationSuites||[];
+  const current=$("#evaluationSuiteVersion").value;
+  const projectSuites=suites.filter(function(item){return item.project_id&&item.latest_version;});
+  $("#evaluationSuiteVersion").innerHTML='<option value="">请选择已发布的项目测试集</option>'+projectSuites.map(function(item){return '<option value="'+esc(item.latest_version.id)+'">'+esc(item.name+" · v"+item.latest_version.version+" · "+item.latest_version.case_count+" 条")+'</option>';}).join("");
+  if(projectSuites.some(function(item){return item.latest_version.id===current;}))$("#evaluationSuiteVersion").value=current;
+}
+function evaluationSuiteSourceLabel(suite){return suite.project_id?"项目测试集":((suite.source==="evalscope_standard")?"EvalScope 标准集":"平台内置集");}
+function renderEvaluationSuites(){
+  const suites=state.evaluationSuites||[];
+  $("#evaluationSuiteList").innerHTML=suites.map(function(suite){
+    const latest=suite.latest_version||{};const isProject=Boolean(suite.project_id);
+    const meta=latest.id?("v"+latest.version+" · "+latest.case_count+" 条 · "+shortId(latest.content_sha256)):"尚未发布版本";
+    const actions=isProject?(hasPermission("evaluation:manage")?'<label class="evaluation-suite-upload"><input type="file" data-evaluation-suite-file accept=".json,.jsonl,.csv,.zip,.txt,.md,.docx,.pdf"><span>选择素材</span></label><button class="button secondary" type="button" data-evaluation-suite-import="'+esc(suite.id)+'">校验并发布新版本</button>':'<span class="muted">仅管理员可发布版本</span>'):(hasPermission("evaluation:manage")?'<button class="button secondary" type="button" data-evaluation-suite-clone="'+esc(suite.id)+'">复制到当前项目</button>':'');
+    return '<article class="evaluation-suite-card"><header><div><span>'+esc(evaluationSuiteSourceLabel(suite))+'</span><strong>'+esc(suite.name)+'</strong></div>'+statusPill(suite.status)+'</header><p>'+esc(suite.description||"暂无说明")+'</p><dl><div><dt>能力分类</dt><dd>'+esc(evaluationKindLabels[suite.category]||suite.category||"通用")+'</dd></div><div><dt>最新版本</dt><dd>'+esc(meta)+'</dd></div></dl><footer>'+actions+'</footer></article>';
+  }).join("")||'<div class="evaluation-empty-state"><strong>暂无测试集</strong><p>创建项目测试集并导入已授权、已脱敏的素材。</p></div>';
+}
+async function refreshEvaluationSuites(){
+  try{const data=await api("/api/model-evaluation/suites");state.evaluationSuites=data.suites||[];populateEvaluationSuites();renderEvaluationSuites();renderEvaluationRuns();syncEvaluationForm();}catch(error){toast("测试集加载失败："+error.message,true);}
+}
+async function createEvaluationSuite(event){
+  event.preventDefault();const errorNode=$("#evaluationSuiteFormError");errorNode.textContent="";
+  try{await api("/api/model-evaluation/suites",{method:"POST",body:{name:$("#evaluationSuiteName").value.trim(),category:$("#evaluationSuiteCategory").value,description:$("#evaluationSuiteDescription").value.trim()}});event.currentTarget.reset();toast("项目测试集已创建，请选择素材发布首个版本");await refreshEvaluationSuites();}catch(error){errorNode.textContent=error.message;}
+}
+async function cloneEvaluationSuite(suiteId){
+  const suite=state.evaluationSuites.find(function(item){return item.id===suiteId;});if(!suite)return;
+  const name=window.prompt("复制后的项目测试集名称",suite.name+"（项目副本）");if(name===null)return;
+  try{await api("/api/model-evaluation/suites/"+encodeURIComponent(suiteId)+"/clone",{method:"POST",body:{name:name.trim()}});toast("已复制为当前项目的可编辑测试集");await refreshEvaluationSuites();}catch(error){toast("复制测试集失败："+error.message,true);}
+}
+async function importEvaluationSuite(suiteId,button){
+  const card=button.closest(".evaluation-suite-card");const input=card&&card.querySelector("[data-evaluation-suite-file]");const file=input&&input.files&&input.files[0];if(!file){toast("请先选择要导入的素材文件",true);return;}
+  const form=new FormData();form.append("file",file);button.disabled=true;button.textContent="正在校验并发布…";
+  try{const result=await api("/api/model-evaluation/suites/"+encodeURIComponent(suiteId)+"/import",{method:"POST",body:form});toast("新版本已发布，共 "+String((result.validation||{}).total||0)+" 条有效用例");await refreshEvaluationSuites();}catch(error){toast("素材导入失败："+error.message,true);}finally{if(button.isConnected){button.disabled=false;button.textContent="校验并发布新版本";}}
+}
+function comparisonRankFor(result,runId){const item=(result.ranking||[]).find(function(row){return row.run_id===runId;});return item?String(item.rank):"—";}
+function renderEvaluationComparison(){
+  const terminal=state.evaluationRuns.filter(evaluationTerminal);const selected=new Set(state.selectedEvaluationComparisonRunIds||[]);
+  $("#evaluationComparisonRunList").innerHTML=terminal.map(function(run){const snapshot=evaluationSnapshot(run),model=snapshot.model||{},summary=run.summary||{};return '<label class="evaluation-comparison-run"><input type="checkbox" data-evaluation-comparison-run="'+esc(run.id)+'" '+(selected.has(run.id)?"checked":"")+'><span><strong>'+esc(model.name||model.model_name||"未记录模型")+'</strong><small>'+esc(evaluationKindLabels[snapshot.run_kind]||snapshot.run_kind||run.backend)+' · '+esc(evaluationPlanLabels[snapshot.plan]||snapshot.plan||"—")+' · '+esc(fmtTime(run.created_at))+'</small></span><b>'+esc(summary.quality_score==null?"—":evaluationNumber(summary.quality_score,1)+" 分")+'</b></label>';}).join("")||'<p class="muted">当前项目还没有可对比的已结束运行。</p>';
+  $("#createEvaluationComparisonButton").disabled=selected.size<2||selected.size>10||!hasPermission("evaluation:operate");
+  const result=state.evaluationComparisonResult||(((state.evaluationComparisons[0]||{}).config||{}).result)||null;
+  if(!result){$("#evaluationComparisonResult").innerHTML='<p class="muted">请选择 2～10 个已结束运行。</p>';return;}
+  const notice='<div class="evaluation-comparison-notice '+(result.comparable?"good":"warning")+'"><strong>'+(result.comparable?"口径一致，可生成排名":"口径不一致，仅并列展示")+'</strong><span>'+esc(result.notice||"")+(result.mismatches&&result.mismatches.length?" 差异："+esc(result.mismatches.join("、")):"")+'</span></div>';
+  const rows=(result.rows||[]).map(function(row){return '<tr><td>'+comparisonRankFor(result,row.run_id)+'</td><td><strong>'+esc(row.model_name)+'</strong><small class="table-subline">'+esc(shortId(row.run_id))+'</small></td><td>'+esc(row.quality_score==null?"—":evaluationNumber(row.quality_score,1))+'</td><td>'+esc(row.success_rate==null?"—":evaluationNumber(row.success_rate,1)+"%")+'</td><td>'+esc(row.latency_p95_ms==null?"—":evaluationNumber(row.latency_p95_ms,1)+" ms")+'</td><td>'+esc(row.output_tokens_per_second==null?"—":evaluationNumber(row.output_tokens_per_second,2))+'</td><td>'+esc(((row.capacity||{}).max_stable_concurrency)==null?"—":(row.capacity||{}).max_stable_concurrency)+'</td></tr>';}).join("");
+  $("#evaluationComparisonResult").innerHTML=notice+'<div class="table-wrap"><table><thead><tr><th>排名</th><th>模型 / 运行</th><th>质量分</th><th>成功率</th><th>P95</th><th>输出 Token/s</th><th>稳定并发</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+}
+async function createEvaluationComparison(allowMismatch){
+  try{const data=await api("/api/model-evaluation/comparisons",{method:"POST",body:{run_ids:state.selectedEvaluationComparisonRunIds,allow_mismatch:Boolean(allowMismatch)}});state.evaluationComparisonResult=data.result;state.evaluationComparisons.unshift(data.comparison);renderEvaluationComparison();toast(data.result.comparable?"模型对比已生成":"已按确认要求并列展示不同口径运行");}catch(error){if(error.status===409&&!allowMismatch&&window.confirm(error.message+"\n\n是否确认仅并列展示，不进行排名？")){return createEvaluationComparison(true);}toast("模型对比失败："+error.message,true);}
+}
+function closeEvaluationReview(){const dialog=$("#evaluationReviewDialog");if(dialog.open)dialog.close();}
+function openEvaluationReview(resultId,name){
+  const item=state.evaluationResults.find(function(result){return result.id===resultId;});const score=(item&&item.score)||{};const manual=score.manual_review||{};
+  $("#evaluationReviewResultId").value=resultId;$("#evaluationReviewTitle").textContent=(name||"当前用例")+" · 人工复核";$("#evaluationReviewScore").value=Math.round(Number(manual.score==null?(score.score==null ? 0.8 : score.score):manual.score)*100);$("#evaluationReviewComment").value=manual.comment||"";$("#evaluationReviewError").textContent="";const dialog=$("#evaluationReviewDialog");if(typeof dialog.showModal==="function")dialog.showModal();else dialog.setAttribute("open","");
+}
+async function submitEvaluationReview(event){
+  event.preventDefault();const errorNode=$("#evaluationReviewError");errorNode.textContent="";const resultId=$("#evaluationReviewResultId").value;
+  try{await api("/api/model-evaluation/runs/"+encodeURIComponent(state.selectedEvaluationRunId)+"/results/"+encodeURIComponent(resultId)+"/reviews",{method:"POST",body:{score:Number($("#evaluationReviewScore").value),rubric:{},comment:$("#evaluationReviewComment").value.trim()}});closeEvaluationReview();toast("人工复核已保存，综合分和报告将使用复核结果");state.evaluationReport=null;state.evaluationReportRunId="";await refreshSelectedEvaluationRun();}catch(error){errorNode.textContent=error.message;}
 }
 function renderEvaluationRuns(){
   $("#evaluationSuiteCount").textContent=String(((state.evaluationBootstrap||{}).suites||[]).length)+" 个";
@@ -2004,19 +2092,45 @@ function renderEvaluationRuns(){
   const runtime=(state.evaluationBootstrap&&state.evaluationBootstrap.runtime)||{};
   $("#evaluationRuntimeState").textContent=runtime.evalscope_configured?("EvalScope "+runtime.evalscope_version):"Mock / 原生可用";
   $("#evaluationRuntimeHint").textContent=runtime.evalscope_configured?("EvalScope 已配置为隔离子进程，队列后端为 "+(runtime.queue_backend||"local")+"。"):("EvalScope 尚未配置；Mock 与原生基础评测可用，标准 Benchmark 和并发阶梯保持禁用。队列后端为 "+(runtime.queue_backend||"local")+"。");
-  $("#evaluationRunsBody").innerHTML=state.evaluationRuns.map(function(run){
+  const total=state.evaluationRuns.length;const totalPages=Math.max(1,Math.ceil(total/state.evaluationRunsPageSize));state.evaluationRunsPage=Math.min(Math.max(1,state.evaluationRunsPage),totalPages);const start=(state.evaluationRunsPage-1)*state.evaluationRunsPageSize;const pageRuns=state.evaluationRuns.slice(start,start+state.evaluationRunsPageSize);const end=Math.min(total,start+pageRuns.length);
+  $("#evaluationRunsPageSummary").textContent=total?("共 "+total+" 条 · 当前 "+(start+1)+"–"+end+" 条"):"共 0 条";$("#evaluationRunsPageIndicator").textContent="第 "+state.evaluationRunsPage+" / "+totalPages+" 页";$("#evaluationRunsPrevButton").disabled=state.evaluationRunsPage<=1;$("#evaluationRunsNextButton").disabled=state.evaluationRunsPage>=totalPages;
+  const signature=JSON.stringify({page:state.evaluationRunsPage,selected:state.selectedEvaluationRunId,canOperate:hasPermission("evaluation:operate"),canManage:hasPermission("evaluation:manage"),runs:state.evaluationRuns.map(function(run){return [run.id,run.status,run.phase,run.progress,run.artifact_ref,run.created_at];})});
+  if(signature===state.evaluationRunsSignature)return;
+  state.evaluationRunsSignature=signature;
+  $("#evaluationRunsBody").innerHTML=pageRuns.map(function(run){
     const snapshot=evaluationSnapshot(run);const model=snapshot.model||{};const selected=run.id===state.selectedEvaluationRunId;
-    return '<tr'+(selected?' class="selected"':"")+'><td><div class="evaluation-run-name"><strong>'+esc(evaluationKindLabels[snapshot.run_kind]||snapshot.run_kind||run.backend)+'</strong><small>'+esc(model.name||model.model_name||"未记录模型")+'</small></div></td><td>'+esc(snapshot.plan==="standard"?"标准评测":"快速体检")+'</td><td>'+statusPill(run.status)+'</td><td><div class="evaluation-run-progress"><i><b style="width:'+Math.max(0,Math.min(Number(run.progress)||0,100))+'%"></b></i><span>'+esc(run.progress||0)+'%</span></div></td><td>'+esc(fmtTime(run.created_at))+'</td><td><button class="text-button" type="button" data-evaluation-open="'+esc(run.id)+'">查看</button>'+(evaluationActive(run)&&hasPermission("evaluation:operate")?'<button class="text-button danger" type="button" data-evaluation-stop="'+esc(run.id)+'">停止</button>':"")+'</td></tr>';
+    const actions='<div class="evaluation-run-actions"><button class="text-button" type="button" data-evaluation-open="'+esc(run.id)+'">查看详情</button>'+(evaluationTerminal(run)?'<button class="text-button" type="button" data-evaluation-report="'+esc(run.id)+'">评测报告</button>':"")+(evaluationActive(run)&&hasPermission("evaluation:operate")?'<button class="text-button danger" type="button" data-evaluation-stop="'+esc(run.id)+'">停止</button>':"")+(evaluationTerminal(run)&&hasPermission("evaluation:manage")?'<button class="text-button danger" type="button" data-evaluation-delete="'+esc(run.id)+'">删除</button>':"")+'</div>';
+    return '<tr'+(selected?' class="selected"':"")+'><td><div class="evaluation-run-name"><strong>'+esc(evaluationKindLabels[snapshot.run_kind]||snapshot.run_kind||run.backend)+'</strong><small>'+esc((model.name||model.model_name||"未记录模型")+" · "+evaluationRunLabel(run).replace("评测任务 ",""))+'</small></div></td><td>'+esc(evaluationPlanLabels[snapshot.plan]||snapshot.plan||"—")+'</td><td>'+statusPill(run.status)+'</td><td><div class="evaluation-run-progress"><i><b style="width:'+Math.max(0,Math.min(Number(run.progress)||0,100))+'%"></b></i><span>'+esc(run.progress||0)+'%</span></div></td><td>'+esc(fmtTime(run.created_at))+'</td><td>'+actions+'</td></tr>';
   }).join("")||'<tr><td class="evaluation-empty-row" colspan="6">当前项目还没有模型评测运行。</td></tr>';
 }
+function setEvaluationRunsPage(page){const totalPages=Math.max(1,Math.ceil(state.evaluationRuns.length/state.evaluationRunsPageSize));const next=Math.min(Math.max(1,Number(page)||1),totalPages);if(next===state.evaluationRunsPage)return;state.evaluationRunsPage=next;state.evaluationRunsSignature="";renderEvaluationRuns();}
+function readableEvaluationEventMessage(item){
+  const message=String((item&&item.message)||(item&&item.event_type)||"阶段事件");
+  if(!message.includes("�"))return message;
+  const phase=String((item&&item.phase)||(item&&item.status)||"");
+  const eventType=String((item&&item.event_type)||"");
+  if(/^EvalScope\b/i.test(message)){
+    if(eventType==="failed"||phase==="failed")return "EvalScope 子进程执行失败";
+    if(eventType==="completed"||phase==="completed")return "EvalScope 子进程执行完成";
+    if(eventType==="stopped"||phase==="stopped")return "EvalScope 子进程已停止";
+    if(phase==="running"||phase==="preparing")return "EvalScope 评测已启动";
+    return "EvalScope 运行阶段更新";
+  }
+  return "阶段事件（历史记录编码异常）";
+}
 function renderEvaluationDetail(run,events,results,total){
-  if(!run){$("#evaluationDetailTitle").textContent="选择一条评测查看运行监控";$("#evaluationDetailMessage").textContent="提交后可在这里查看 Token 来源、吞吐、P95/P99、错误分类与用例明细。";return;}
-  const snapshot=evaluationSnapshot(run);const summary=run.summary||{};const performance=summary.performance||{};const token=summary.token_usage||{};const robustness=summary.robustness||{};
-  $("#evaluationDetailTitle").textContent=(evaluationKindLabels[snapshot.run_kind]||snapshot.run_kind||"模型评测")+" · "+shortId(run.id);
-  $("#evaluationDetailMessage").textContent=run.message||run.error||"评测运行已创建";
+  if(!run){$("#evaluationDetailTitle").textContent="选择一条评测查看运行监控";$("#evaluationDetailMessage").textContent="提交后可在这里查看 Token 来源、吞吐、P95/P99、错误分类与用例明细。";$("#evaluationPhaseLabel").textContent="尚未选择运行";$("#evaluationProgressLabel").textContent="0%";$("#evaluationProgressBar").style.width="0%";$("#stopEvaluationButton").classList.add("hidden");$("#deleteEvaluationButton").classList.add("hidden");$("#openEvaluationReportButton").disabled=true;$("#downloadEvaluationSummaryButton").disabled=true;$("#downloadEvaluationPerformanceButton").disabled=true;$("#evaluationScoringConfidence").textContent="—";$("#evaluationReviewState").textContent="规则 / 裁判 / 人工";$("#evaluationCapacity").textContent="—";$("#evaluationCapacityState").textContent="并发 / 拐点";$("#evaluationEventsList").innerHTML='<p class="muted">尚未选择运行。</p>';$("#evaluationResultsBody").innerHTML='<tr><td class="evaluation-empty-row" colspan="8">请先从“评测运行”中选择任务。</td></tr>';return;}
+  const snapshot=evaluationSnapshot(run);const summary=Object.assign({},run.summary||{});const latestLiveEvent=[...(events||[])].reverse().find(function(item){const data=item.data||{};return data.success_rate!=null||data.p95_ms!=null||data.output_tokens_per_second!=null;});
+  if(latestLiveEvent){const live=latestLiveEvent.data||{};if(summary.success_rate==null&&live.success_rate!=null)summary.success_rate=live.success_rate;summary.performance=Object.assign({},summary.performance||{});if(summary.performance.latency_p95_ms==null&&live.p95_ms!=null)summary.performance.latency_p95_ms=live.p95_ms;if(summary.performance.output_tokens_per_second==null&&live.output_tokens_per_second!=null)summary.performance.output_tokens_per_second=live.output_tokens_per_second;}
+  const performance=summary.performance||{};const token=summary.token_usage||{};const robustness=summary.robustness||{};const scoring=summary.scoring||{};const capacity=summary.capacity||{};
+  $("#evaluationDetailTitle").textContent=(evaluationKindLabels[snapshot.run_kind]||snapshot.run_kind||"模型评测")+" · "+evaluationRunLabel(run);
+  $("#evaluationDetailMessage").textContent=readableEvaluationEventMessage({message:run.message||run.error||"评测运行已创建",phase:run.phase,status:run.status});
   $("#evaluationPhaseLabel").textContent=evaluationPhaseLabels[run.phase]||evaluationPhaseLabels[run.status]||run.phase||run.status;
   $("#evaluationProgressLabel").textContent=String(run.progress||0)+"%";$("#evaluationProgressBar").style.width=Math.max(0,Math.min(Number(run.progress)||0,100))+"%";
   $("#stopEvaluationButton").classList.toggle("hidden",!evaluationActive(run)||!hasPermission("evaluation:operate"));
+  $("#deleteEvaluationButton").classList.toggle("hidden",!evaluationTerminal(run)||!hasPermission("evaluation:manage"));
+  $("#openEvaluationReportButton").disabled=!evaluationTerminal(run);
+  $("#downloadEvaluationSummaryButton").disabled=!run.artifact_ref;$("#downloadEvaluationPerformanceButton").disabled=!run.artifact_ref;
   $("#evaluationSuccessRate").textContent=summary.success_rate==null?"—":evaluationNumber(summary.success_rate,1)+"%";
   $("#evaluationQualityScore").textContent="质量分 "+(summary.quality_score==null?"—":evaluationNumber(summary.quality_score,1));
   const sources=Object.keys(token.source_counts||{});const sourceLabels={api_usage:"API 精确",local_tokenizer:"本地 Tokenizer",estimated:"估算"};
@@ -2024,22 +2138,58 @@ function renderEvaluationDetail(run,events,results,total){
   $("#evaluationTokenCount").textContent="总量 "+(token.total_tokens==null?"—":token.total_tokens);
   $("#evaluationLatency").textContent=(performance.latency_p95_ms==null?"—":evaluationNumber(performance.latency_p95_ms,1))+" / "+(performance.latency_p99_ms==null?"—":evaluationNumber(performance.latency_p99_ms,1))+" ms";
   $("#evaluationThroughput").textContent=performance.output_tokens_per_second==null?"—":evaluationNumber(performance.output_tokens_per_second,2);
-  $("#evaluationRobustness").textContent=robustness.average_retention==null?"—":evaluationNumber(robustness.average_retention,1)+"% / "+evaluationNumber(robustness.worst_retention,1)+"%";
+  const robustnessApplicable=["foundation","mock","mock_full","custom"].includes(snapshot.run_kind)||robustness.average_retention!=null;
+  $("#evaluationRobustness").textContent=robustness.average_retention==null?(robustnessApplicable?"等待数据":"不适用"):evaluationNumber(robustness.average_retention,1)+"% / "+evaluationNumber(robustness.worst_retention,1)+"%";
+  $("#evaluationScoringConfidence").textContent=scoring.confidence==null?"—":evaluationNumber(scoring.confidence,1)+"%";
+  $("#evaluationReviewState").textContent="人工已复核 "+String(scoring.manual_reviewed_cases||0)+" / 待复核 "+String(scoring.pending_manual_review_cases||0);
+  const capacityApplicable=["concurrency","deep_performance"].includes(snapshot.run_kind)||capacity.max_stable_rps!=null||capacity.max_stable_concurrency!=null;
+  $("#evaluationCapacity").textContent=capacity.max_stable_rps!=null?(evaluationNumber(capacity.max_stable_rps,2)+" RPS"):(capacity.max_stable_concurrency==null?(capacityApplicable?"等待数据":"不适用"):("并发 "+capacity.max_stable_concurrency));
+  $("#evaluationCapacityState").textContent=(capacity.capacity_knee&&capacity.capacity_knee.concurrency!=null)?("拐点并发 "+capacity.capacity_knee.concurrency):(capacity.conclusion||(capacityApplicable?"等待性能阶梯":"当前类型不计算容量"));
   $("#evaluationEventCount").textContent=events.length+" 条";
-  $("#evaluationEventsList").innerHTML=events.map(function(item){return '<article class="evaluation-event"><i></i><div><strong>'+esc(item.message||item.event_type)+'</strong><small>'+esc(evaluationPhaseLabels[item.phase]||item.phase||"事件")+' · '+esc(fmtTime(item.created_at))+(item.progress==null?"":" · "+esc(item.progress)+"%")+'</small></div></article>';}).join("")||'<p class="muted">暂无阶段事件。</p>';
+  $("#evaluationEventsList").innerHTML=events.map(function(item){return '<article class="evaluation-event"><i></i><div><strong>'+esc(readableEvaluationEventMessage(item))+'</strong><small>'+esc(evaluationPhaseLabels[item.phase]||item.phase||"事件")+' · '+esc(fmtTime(item.created_at))+(item.progress==null?"":" · "+esc(item.progress)+"%")+'</small></div></article>';}).join("")||'<p class="muted">暂无阶段事件。</p>';
   $("#evaluationResultCount").textContent=String(total||0)+" 条";
-  $("#evaluationResultsBody").innerHTML=results.map(function(item){const metrics=item.metrics||{};const score=item.score||{};const totalTokens=metrics.total_tokens==null?((Number(metrics.input_tokens)||0)+(Number(metrics.output_tokens)||0)):metrics.total_tokens;return '<tr><td><code>'+esc(item.case_id||"—")+'</code></td><td>'+statusPill(item.status)+'</td><td>'+esc(totalTokens||"—")+'<small class="table-subline">'+esc(metrics.token_source||"—")+'</small></td><td>'+esc(metrics.ttft_ms==null?"—":evaluationNumber(metrics.ttft_ms,1)+" ms")+'</td><td>'+esc(metrics.latency_ms==null?"—":evaluationNumber(metrics.latency_ms,1)+" ms")+'</td><td><span class="evaluation-result-score">'+esc(score.score==null?"—":evaluationNumber(Number(score.score)*100,1)+"%")+'</span></td></tr>';}).join("")||'<tr><td class="evaluation-empty-row" colspan="6">当前运行尚无用例级明细；性能阶梯请查看顶部汇总与 CSV。</td></tr>';
+  const scoreSourceLabels={deterministic_rules:"规则",deterministic_rules_pending_review:"规则·待复核",rules_and_independent_judge:"规则+裁判",rules_and_independent_judge_pending_review:"规则+裁判·待复核",rules_judge_and_manual_review:"规则+裁判+人工",mock:"Mock"};
+  $("#evaluationResultsBody").innerHTML=results.map(function(item,index){const metrics=item.metrics||{};const score=item.score||{};const info=evaluationCaseInfo(run,item.case_id,index);const totalTokens=metrics.total_tokens==null?((Number(metrics.input_tokens)||0)+(Number(metrics.output_tokens)||0)):metrics.total_tokens;const reviewStatus=(score.manual_review||{}).status||"not_required";const manual=reviewStatus==="completed";const review=hasPermission("evaluation:manage")&&evaluationTerminal(run)?'<button class="text-button" type="button" data-evaluation-review="'+esc(item.id)+'" data-evaluation-review-name="'+esc(info.name)+'">'+(manual?"重新复核":"复核")+'</button>':(manual?"已复核":reviewStatus==="pending"?"待复核":"无需复核");return '<tr><td><div class="evaluation-result-name"><strong title="'+esc(info.name)+'">'+esc(info.name)+'</strong><small>'+esc(info.description||("第 "+String(index+1)+" 条用例"))+'</small></div></td><td>'+evaluationCaseStatusPill(item.status)+'</td><td>'+esc(totalTokens||"—")+'<small class="table-subline">'+esc(metrics.token_source||"—")+'</small></td><td>'+esc(metrics.ttft_ms==null?"—":evaluationNumber(metrics.ttft_ms,1)+" ms")+'</td><td>'+esc(metrics.latency_ms==null?"—":evaluationNumber(metrics.latency_ms,1)+" ms")+'</td><td><span class="evaluation-result-score">'+esc(score.score==null?"—":evaluationNumber(Number(score.score)*100,1)+"%")+'</span></td><td><span class="evaluation-score-source">'+esc(scoreSourceLabels[score.scoring_source]||score.scoring_source||"规则")+'</span></td><td>'+review+'</td></tr>';}).join("")||'<tr><td class="evaluation-empty-row" colspan="8">当前运行尚无用例级明细；性能阶梯请查看顶部汇总与 CSV。</td></tr>';
 }
+function renderEvaluationReport(report){
+  const selected=state.evaluationRuns.find(function(item){return item.id===state.selectedEvaluationRunId;});
+  const available=Boolean(report);
+  $("#downloadEvaluationReportDocxButton").disabled=!available;$("#downloadEvaluationReportPdfButton").disabled=!available;
+  $("#downloadEvaluationSummaryButton").disabled=!selected||!selected.artifact_ref;$("#downloadEvaluationPerformanceButton").disabled=!selected||!selected.artifact_ref;
+  if(!report){state.evaluationReportCasesPage=1;$("#evaluationReportTitle").textContent="选择一条已结束的评测查看报告";$("#evaluationReportMeta").textContent="报告会把指标翻译成可阅读的结论，并说明下一步怎么处理。";const conclusion=$("#evaluationReportConclusion");conclusion.className="evaluation-report-conclusion info";conclusion.innerHTML="<span>结论</span><strong>尚未生成报告</strong><p>请先选择一条已完成、失败或停止的评测任务。</p>";$("#evaluationReportOverview").innerHTML="";$("#evaluationReportMetrics").innerHTML="";$("#evaluationReportFindings").innerHTML='<p class="muted">暂无内容。</p>';$("#evaluationReportRecommendations").innerHTML="";$("#evaluationReportCaseSummary").textContent="暂无用例数据";$("#evaluationReportCasesBody").innerHTML='<tr><td class="evaluation-empty-row" colspan="5">尚未生成报告。</td></tr>';$("#evaluationReportCasesPageSummary").textContent="共 0 条";$("#evaluationReportCasesPageIndicator").textContent="第 1 / 1 页";$("#evaluationReportCasesPrevButton").disabled=true;$("#evaluationReportCasesNextButton").disabled=true;return;}
+  $("#evaluationReportTitle").textContent=report.title+" · "+report.report_number;
+  $("#evaluationReportMeta").textContent=report.run_kind_text+" · "+report.model_name+" · 生成于 "+report.generated_at;
+  const conclusion=$("#evaluationReportConclusion");conclusion.className="evaluation-report-conclusion "+esc(report.conclusion.level||"info");conclusion.innerHTML='<span>一句话结论</span><strong>'+esc(report.conclusion.title)+'</strong><p>'+esc(report.conclusion.summary)+'</p>';
+  $("#evaluationReportOverview").innerHTML=[["被测模型",report.model_name],["评测类型",report.run_kind_text],["测试集",report.suite_name+" · v"+report.suite_version],["运行方案",report.plan_text],["任务状态",report.status_text]].map(function(item){return '<div><span>'+esc(item[0])+'</span><strong>'+esc(item[1])+'</strong></div>';}).join("");
+  $("#evaluationReportMetrics").innerHTML=(report.metrics||[]).map(function(item){return '<article><span>'+esc(item.assessment)+'</span><strong>'+esc(item.value)+'</strong><h5>'+esc(item.label)+'</h5><p>'+esc(item.explanation)+'</p></article>';}).join("");
+  $("#evaluationReportFindings").innerHTML=(report.findings||[]).map(function(item){return '<article class="'+esc(item.level||"info")+'"><i></i><div><strong>'+esc(item.title)+'</strong><p>'+esc(item.detail)+'</p></div></article>';}).join("")||'<p class="muted">暂无内容。</p>';
+  $("#evaluationReportRecommendations").innerHTML=(report.recommendations||[]).map(function(item){return '<li>'+esc(item)+'</li>';}).join("");
+  const summary=report.case_summary||{};$("#evaluationReportCaseSummary").textContent="共 "+(summary.total||0)+" 条 · 达标 "+(summary.passed||0)+" · 未达标 "+(summary.failed||0)+" · 执行异常 "+(summary.error||0);
+  const cases=report.cases||[];const total=cases.length;const totalPages=Math.max(1,Math.ceil(total/state.evaluationReportCasesPageSize));state.evaluationReportCasesPage=Math.min(Math.max(1,state.evaluationReportCasesPage),totalPages);const start=(state.evaluationReportCasesPage-1)*state.evaluationReportCasesPageSize;const pageCases=cases.slice(start,start+state.evaluationReportCasesPageSize);const end=Math.min(total,start+pageCases.length);
+  $("#evaluationReportCasesPageSummary").textContent=total?("共 "+total+" 条 · 当前 "+(start+1)+"–"+end+" 条"):"共 0 条";$("#evaluationReportCasesPageIndicator").textContent="第 "+state.evaluationReportCasesPage+" / "+totalPages+" 页";$("#evaluationReportCasesPrevButton").disabled=state.evaluationReportCasesPage<=1;$("#evaluationReportCasesNextButton").disabled=state.evaluationReportCasesPage>=totalPages;
+  $("#evaluationReportCasesBody").innerHTML=pageCases.map(function(item){return '<tr><td><strong>'+esc(item.name)+'</strong></td><td>'+esc(item.category)+'</td><td>'+evaluationCaseStatusPill(item.status)+'</td><td>'+esc(item.score==null?"—":evaluationNumber(item.score,1)+"%")+'</td><td>'+esc(item.latency_ms==null?"—":evaluationNumber(item.latency_ms,1)+" ms")+'</td></tr>';}).join("")||'<tr><td class="evaluation-empty-row" colspan="5">当前运行没有用例级明细，请查看报告结论与核心指标。</td></tr>';
+}
+function setEvaluationReportCasesPage(page){const totalPages=Math.max(1,Math.ceil((((state.evaluationReport||{}).cases)||[]).length/state.evaluationReportCasesPageSize));const next=Math.min(Math.max(1,Number(page)||1),totalPages);if(next===state.evaluationReportCasesPage)return;state.evaluationReportCasesPage=next;renderEvaluationReport(state.evaluationReport);}
+async function loadEvaluationReport(force){
+  const runId=state.selectedEvaluationRunId;const run=state.evaluationRuns.find(function(item){return item.id===runId;});
+  if(!runId||!evaluationTerminal(run)){state.evaluationReport=null;state.evaluationReportRunId="";renderEvaluationReport(null);if(runId)toast("任务结束后才能生成最终评测报告",true);return;}
+  if(!force&&state.evaluationReport&&state.evaluationReportRunId===runId){renderEvaluationReport(state.evaluationReport);return;}
+  $("#evaluationReportTitle").textContent="正在生成可阅读报告…";$("#evaluationReportMeta").textContent="正在整理结论、指标解释、异常和建议。";
+  try{const payload=await api("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/report");if(state.evaluationReportRunId!==runId)state.evaluationReportCasesPage=1;state.evaluationReport=payload.report;state.evaluationReportRunId=runId;renderEvaluationReport(state.evaluationReport);}catch(error){renderEvaluationReport(null);toast("评测报告生成失败："+error.message,true);}
+}
+function openEvaluationReport(runId){if(runId)state.selectedEvaluationRunId=runId;showEvaluationWorkspace("report");loadEvaluationReport(true);}
 async function refreshSelectedEvaluationRun(){
   const runId=state.selectedEvaluationRunId;if(!runId){renderEvaluationDetail(null,[],[],0);return;}
   try {const payloads=await Promise.all([api("/api/model-evaluation/runs/"+encodeURIComponent(runId)),api("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/events?limit=1000"),api("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/results?page_size=200")]);const run=payloads[0];state.evaluationEvents=payloads[1].events||[];state.evaluationResults=payloads[2].results||[];const index=state.evaluationRuns.findIndex(function(item){return item.id===run.id;});if(index>=0)state.evaluationRuns[index]=Object.assign({},state.evaluationRuns[index],run);renderEvaluationRuns();renderEvaluationDetail(run,state.evaluationEvents,state.evaluationResults,payloads[2].total||0);}catch(error){toast("评测详情加载失败："+error.message,true);}
 }
 async function loadEvaluationWorkspace(reset){
-  try {if(reset||!state.evaluationBootstrap){state.evaluationBootstrap=await api("/api/model-evaluation/bootstrap");state.evaluationRuns=state.evaluationBootstrap.runs||[];populateEvaluationModels();syncEvaluationForm();}else{const data=await api("/api/model-evaluation/runs?limit=100");state.evaluationRuns=data.runs||[];}if(!state.evaluationRuns.some(function(run){return run.id===state.selectedEvaluationRunId;}))state.selectedEvaluationRunId=(state.evaluationRuns[0]||{}).id||"";renderEvaluationRuns();await refreshSelectedEvaluationRun();}catch(error){toast("模型评测加载失败："+error.message,true);}
+  try {if(reset||!state.evaluationBootstrap){if(reset)state.evaluationRunsPage=1;state.evaluationBootstrap=await api("/api/model-evaluation/bootstrap");state.evaluationRuns=state.evaluationBootstrap.runs||[];state.evaluationSuites=state.evaluationBootstrap.suites||[];state.evaluationComparisons=state.evaluationBootstrap.comparisons||[];populateEvaluationModels();populateEvaluationSuites();renderEvaluationSuites();renderEvaluationComparison();syncEvaluationForm();}else{const data=await api("/api/model-evaluation/runs?limit=500");state.evaluationRuns=data.runs||[];}if(!state.evaluationRuns.some(function(run){return run.id===state.selectedEvaluationRunId;}))state.selectedEvaluationRunId=(state.evaluationRuns[0]||{}).id||"";renderEvaluationRuns();renderEvaluationComparison();await refreshSelectedEvaluationRun();}catch(error){toast("模型评测加载失败："+error.message,true);}
 }
 async function submitEvaluation(event){
-  event.preventDefault();$("#evaluationFormError").textContent="";const kind=$("#evaluationRunKind").value;const modelId=$("#evaluationModelProfile").value;if(kind!=="mock"&&!modelId){$("#evaluationFormError").textContent="请选择已配置的被测模型";return;}const button=$("#evaluationSubmitButton");button.disabled=true;button.textContent="正在提交…";try{const run=await api("/api/model-evaluation/runs",{method:"POST",body:{run_kind:kind,plan:$("#evaluationPlan").value,model_profile_id:modelId,stream:$("#evaluationStream").checked,max_tokens:Number($("#evaluationMaxTokens").value),timeout_seconds:Number($("#evaluationTimeout").value)}});state.selectedEvaluationRunId=run.id;toast("模型评测已排队："+shortId(run.id));await loadEvaluationWorkspace(false);}catch(error){$("#evaluationFormError").textContent=error.message;}finally{button.textContent="提交评测任务";syncEvaluationForm();}}
+  event.preventDefault();$("#evaluationFormError").textContent="";const kind=$("#evaluationRunKind").value;const modelId=$("#evaluationModelProfile").value;if(!["mock","mock_full"].includes(kind)&&!modelId){$("#evaluationFormError").textContent="请选择已配置的被测模型";return;}if($("#evaluationJudgeProfile").value&&$("#evaluationJudgeProfile").value===modelId){$("#evaluationFormError").textContent="裁判模型必须独立于被测模型";return;}const button=$("#evaluationSubmitButton");button.disabled=true;button.textContent="正在提交…";try{const run=await api("/api/model-evaluation/runs",{method:"POST",body:{run_kind:kind,plan:$("#evaluationPlan").value,model_profile_id:modelId,suite_version_id:$("#evaluationSuiteVersion").value,judge_model_profile_id:$("#evaluationJudgeProfile").value,server_session_id:$("#evaluationServerSession").value,manual_review_percent:Number($("#evaluationManualReviewPercent").value),stream:$("#evaluationStream").checked,max_tokens:Number($("#evaluationMaxTokens").value),timeout_seconds:Number($("#evaluationTimeout").value)}});state.evaluationRunsPage=1;state.selectedEvaluationRunId=run.id;showEvaluationWorkspace("detail");toast(evaluationRunLabel(run)+"已排队");await loadEvaluationWorkspace(false);}catch(error){$("#evaluationFormError").textContent=error.message;}finally{button.textContent="提交评测任务";syncEvaluationForm();}}
 async function stopEvaluationRun(runId){try{await api("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/stop",{method:"POST"});toast("已请求安全停止模型评测");state.selectedEvaluationRunId=runId;await loadEvaluationWorkspace(false);}catch(error){toast("停止评测失败："+error.message,true);}}
+async function deleteEvaluationRun(runId){const run=state.evaluationRuns.find(function(item){return item.id===runId;});if(!run)return;if(!window.confirm("确认删除“"+evaluationRunLabel(run)+"”？\n\n该任务的阶段事件、结果明细和评测产物会一并删除，且无法恢复。"))return;try{await api("/api/model-evaluation/runs/"+encodeURIComponent(runId),{method:"DELETE"});toast(evaluationRunLabel(run)+"已删除");if(state.selectedEvaluationRunId===runId)state.selectedEvaluationRunId="";showEvaluationWorkspace("runs");await loadEvaluationWorkspace(false);}catch(error){toast("删除评测失败："+error.message,true);}}
+async function downloadEvaluationReport(format){const runId=state.selectedEvaluationRunId;if(!runId){toast("请先选择评测运行",true);return;}try{const response=await fetch("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/report/"+format,{headers:{"X-Project-ID":state.projectId}});if(!response.ok){const data=await response.json();throw new Error(data.detail||"报告下载失败");}const blob=await response.blob();const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download="model_evaluation_report."+format;document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);}catch(error){toast("评测报告下载失败："+error.message,true);}}
 async function downloadEvaluationArtifact(kind){const runId=state.selectedEvaluationRunId;if(!runId){toast("请先选择评测运行",true);return;}try{const response=await fetch("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/artifacts/"+kind,{headers:{"X-Project-ID":state.projectId}});if(!response.ok){const data=await response.json();throw new Error(data.detail||"下载失败");}const blob=await response.blob();const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download=kind==="performance"?"model_evaluation_performance.csv":"model_evaluation_summary.json";document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);}catch(error){toast("下载评测产物失败："+error.message,true);}}
 async function loadModels() {
   try {
@@ -2458,25 +2608,68 @@ async function loadIdentityMembers(projectId) {
 }
 function renderIdentityMembers() {
   const roleNames={viewer:"只读成员",tester:"测试执行者",project_admin:"项目管理员"};
-  $("#identityMemberCount").textContent=state.identityMembers.length;
+  $("#identityMemberCount").textContent=state.identityMembers.length+" 人";
   $("#identityMembersBody").innerHTML=state.identityMembers.map(function(member){
     return '<tr><td><strong>'+esc(member.display_name)+'</strong><small class="table-subline">'+esc(member.username)+'</small></td><td><span class="role-badge '+esc(member.role)+'">'+esc(roleNames[member.role] || member.role)+'</span></td><td><span class="account-state '+(member.is_active?"active":"disabled")+'"><i></i>'+(member.is_active?"正常":"已停用")+'</span></td><td><button class="text-button danger-text" data-member-remove="'+esc(member.user_id)+'">移除</button></td></tr>';
   }).join("") || '<tr><td colspan="4">当前项目尚未配置成员</td></tr>';
 }
+function identityPage(items,pageKey) {
+  const total=items.length,totalPages=Math.max(1,Math.ceil(total/state.identityPageSize));
+  state[pageKey]=Math.min(Math.max(1,Number(state[pageKey] || 1)),totalPages);
+  const start=(state[pageKey]-1)*state.identityPageSize;
+  return {items:items.slice(start,start+state.identityPageSize),total:total,totalPages:totalPages,page:state[pageKey],start:total?start+1:0,end:Math.min(total,start+state.identityPageSize)};
+}
+function renderIdentityPager(prefix,pageInfo) {
+  $("#"+prefix+"PageSummary").textContent=pageInfo.total?"共 "+pageInfo.total+" 条 · 当前 "+pageInfo.start+"–"+pageInfo.end+" 条":"共 0 条";
+  $("#"+prefix+"PageIndicator").textContent="第 "+pageInfo.page+" / "+pageInfo.totalPages+" 页";
+  $("#"+prefix+"PrevButton").disabled=pageInfo.page<=1;
+  $("#"+prefix+"NextButton").disabled=pageInfo.page>=pageInfo.totalPages;
+}
+function renderIdentityUsers() {
+  const keyword=$("#identityUserSearch").value.trim().toLowerCase(),role=$("#identityUserRoleFilter").value,status=$("#identityUserStatusFilter").value;
+  const filtered=state.identityUsers.filter(function(user){
+    const matchesKeyword=!keyword||(String(user.username||"")+" "+String(user.display_name||"")).toLowerCase().includes(keyword);
+    const matchesRole=role==="all"||(role==="platform"?user.is_superuser:!user.is_superuser);
+    const matchesStatus=status==="all"||(status==="active"?user.is_active:!user.is_active);
+    return matchesKeyword&&matchesRole&&matchesStatus;
+  });
+  const page=identityPage(filtered,"identityUsersPage");
+  $("#identityUsersBody").innerHTML=page.items.map(function(user){
+    const self=state.identity && state.identity.user && state.identity.user.id===user.id;
+    return '<tr><td><strong>'+esc(user.display_name)+'</strong><small class="table-subline">'+esc(user.username)+(self?" · 当前账号":"")+'</small></td><td><span class="role-badge '+(user.is_superuser?"platform":"standard")+'">'+(user.is_superuser?"平台管理员":"普通用户")+'</span></td><td><span class="account-state '+(user.is_active?"active":"disabled")+'"><i></i>'+(user.is_active?"正常":"已停用")+'</span></td><td>'+esc(fmtTime(user.last_login_at))+'</td><td>'+esc(fmtTime(user.created_at))+'</td><td><div class="identity-row-actions"><button class="text-button" data-user-edit="'+esc(user.id)+'">编辑</button><button class="text-button '+(user.is_active?"danger-text":"")+'" data-user-toggle="'+esc(user.id)+'" data-next-active="'+(user.is_active?"false":"true")+'">'+(user.is_active?"停用":"启用")+'</button></div></td></tr>';
+  }).join("") || '<tr><td colspan="6">没有符合条件的平台用户</td></tr>';
+  renderIdentityPager("identityUsers",page);
+}
+function renderIdentityProjects() {
+  const keyword=$("#identityProjectSearch").value.trim().toLowerCase(),status=$("#identityProjectStatusFilter").value;
+  const filtered=state.identityProjects.filter(function(project){
+    const matchesKeyword=!keyword||(String(project.name||"")+" "+String(project.project_key||"")+" "+String(project.description||"")).toLowerCase().includes(keyword);
+    const matchesStatus=status==="all"||(status==="active"?project.is_active:!project.is_active);
+    return matchesKeyword&&matchesStatus;
+  });
+  const page=identityPage(filtered,"identityProjectsPage");
+  $("#identityProjectsBody").innerHTML=page.items.map(function(project){
+    const current=project.id===state.projectId;
+    return '<tr><td><strong>'+esc(project.name)+'</strong><small class="table-subline">'+esc(project.description||"未填写项目说明")+(current?" · 当前项目":"")+'</small></td><td><code>'+esc(project.project_key)+'</code></td><td><span class="account-state '+(project.is_active?"active":"disabled")+'"><i></i>'+(project.is_active?"正常":"已停用")+'</span></td><td>'+esc(fmtTime(project.updated_at))+'</td><td>'+esc(fmtTime(project.created_at))+'</td><td><div class="identity-row-actions"><button class="text-button" data-project-members="'+esc(project.id)+'">成员管理</button><button class="text-button" data-project-edit="'+esc(project.id)+'">编辑</button></div></td></tr>';
+  }).join("") || '<tr><td colspan="6">没有符合条件的项目空间</td></tr>';
+  renderIdentityPager("identityProjects",page);
+}
+function renderIdentityRoles() {
+  const permissionLabels={"project:view":"查看项目","test:execute":"执行测试","report:manage":"管理报告","server:operate":"操作服务器","project:members":"管理成员","interface:manage":"管理接口","evaluation:view":"查看评测","evaluation:manage":"管理评测","evaluation:operate":"执行评测"};
+  const roleBoundaries={viewer:"适合浏览结果和评测内容，不可发起或修改任务",tester:"适合测试执行人员，可运行任务并管理报告",project_admin:"项目内最高权限，可维护成员、接口和评测资产"};
+  const keyword=$("#identityRoleSearch").value.trim().toLowerCase();
+  const filtered=state.identityRoles.filter(function(role){return !keyword||(String(role.label||"")+" "+String(role.key||"")+" "+(role.permissions||[]).join(" ")).toLowerCase().includes(keyword);});
+  const page=identityPage(filtered,"identityRolesPage");
+  $("#identityRoleMatrix").innerHTML=page.items.map(function(role){return '<tr><td><strong>'+esc(role.label)+'</strong></td><td><code>'+esc(role.key)+'</code></td><td><div class="identity-permission-list">'+role.permissions.map(function(permission){return '<span>'+esc(permissionLabels[permission]||permission)+'</span>';}).join("")+'</div></td><td><span class="identity-role-boundary">'+esc(roleBoundaries[role.key]||"按平台固定权限执行")+'</span></td></tr>';}).join("") || '<tr><td colspan="4">没有符合条件的固定角色</td></tr>';
+  renderIdentityPager("identityRoles",page);
+}
 function renderIdentityAdmin() {
   const users=state.identityUsers,projects=state.identityProjects;
-  $("#identityUserCount").textContent=users.length;
-  $("#identityProjectCount").textContent=projects.length;
-  $("#identityAdminCount").textContent=users.filter(function(user){return user.is_superuser && user.is_active;}).length;
-  $("#identityUsersBody").innerHTML=users.map(function(user){
-    const self=state.identity && state.identity.user && state.identity.user.id===user.id;
-    return '<tr><td><strong>'+esc(user.display_name)+'</strong><small class="table-subline">'+esc(user.username)+(self?" · 当前账号":"")+'</small></td><td><span class="role-badge '+(user.is_superuser?"platform":"standard")+'">'+(user.is_superuser?"平台管理员":"普通用户")+'</span></td><td><span class="account-state '+(user.is_active?"active":"disabled")+'"><i></i>'+(user.is_active?"正常":"已停用")+'</span></td><td>'+esc(fmtTime(user.last_login_at))+'</td><td>'+esc(fmtTime(user.created_at))+'</td><td><button class="text-button" data-user-toggle="'+esc(user.id)+'" data-next-active="'+(user.is_active?"false":"true")+'">'+(user.is_active?"停用":"启用")+'</button></td></tr>';
-  }).join("") || '<tr><td colspan="6">暂无平台用户</td></tr>';
+  renderIdentityUsers();renderIdentityProjects();renderIdentityRoles();
   const currentMembershipProject=$("#membershipProjectSelect").value || state.projectId;
-  $("#membershipProjectSelect").innerHTML=projects.filter(function(project){return project.is_active;}).map(function(project){return '<option value="'+esc(project.id)+'">'+esc(project.project_key)+" · "+esc(project.name)+'</option>';}).join("");
-  $("#membershipProjectSelect").value=projects.some(function(project){return project.id===currentMembershipProject;})?currentMembershipProject:(projects[0] || {}).id || "";
+  $("#membershipProjectSelect").innerHTML=projects.map(function(project){return '<option value="'+esc(project.id)+'"'+(project.is_active?'':' disabled')+'>'+esc(project.name)+(project.is_active?'':'（已停用）')+'</option>';}).join("");
+  $("#membershipProjectSelect").value=projects.some(function(project){return project.id===currentMembershipProject&&project.is_active;})?currentMembershipProject:(projects.find(function(project){return project.is_active;}) || {}).id || "";
   $("#membershipUserSelect").innerHTML='<option value="" disabled selected>请选择平台用户</option>'+users.filter(function(user){return user.is_active;}).map(function(user){return '<option value="'+esc(user.id)+'">'+esc(user.display_name)+" · "+esc(user.username)+'</option>';}).join("");
-  $("#identityRoleMatrix").innerHTML=state.identityRoles.map(function(role){return '<article><span>'+esc(role.label)+'</span><b>'+esc(role.key)+'</b><small>'+role.permissions.map(function(permission){return esc(permission);}).join(" · ")+'</small></article>';}).join("");
   renderIdentityAudit();
 }
 function applyIdentityAuditData(data) {
@@ -2509,24 +2702,74 @@ async function loadIdentityData(auditPage) {
     const page=Math.max(1,Number(auditPage || state.identityAuditPage || 1));
     const results=await Promise.all([api("/api/identity/users"),api("/api/identity/projects"),api("/api/identity/roles"),api("/api/identity/audit-events?page="+page+"&page_size="+state.identityAuditPageSize)]);
     state.identityUsers=results[0].users || [];state.identityProjects=results[1].projects || [];state.identityRoles=results[2].roles || [];applyIdentityAuditData(results[3]);
+    const signedInUser=state.identityUsers.find(function(user){return user.id===state.identity.user.id;});
+    if(signedInUser)state.identity.user=Object.assign({},state.identity.user,signedInUser);
+    state.identity.projects=(state.identity.projects||[]).map(function(project){return state.identityProjects.find(function(fresh){return fresh.id===project.id;})||project;});
+    const currentProject=state.identityProjects.find(function(project){return project.id===state.projectId;});if(currentProject)state.identity.current_project=currentProject;
+    syncIdentityChrome();
     renderIdentityAdmin();
     await loadIdentityMembers();
   } catch(error){toast("用户与权限数据加载失败："+error.message,true);}
 }
+function activateIdentityTab(tab) {
+  const target=["users","projects","roles","audit"].includes(tab)?tab:"users";
+  state.identityWorkspaceTab=target;
+  $$("[data-identity-tab]").forEach(function(button){const active=button.dataset.identityTab===target;button.classList.toggle("active",active);button.setAttribute("aria-selected",String(active));});
+  $$("[data-identity-panel]").forEach(function(panel){panel.classList.toggle("active",panel.dataset.identityPanel===target);});
+  $("#newIdentityUserButton").classList.toggle("hidden",target!=="users");
+  $("#newIdentityProjectButton").classList.toggle("hidden",target!=="projects");
+  if(target==="audit")loadIdentityAudit(state.identityAuditPage);
+}
+function showIdentityDrawer(id) {
+  const dialog=$("#"+id);if(!dialog)return;
+  if(typeof dialog.showModal==="function"){if(!dialog.open)dialog.showModal();}else dialog.classList.add("open");
+}
+function closeIdentityDrawer(id) {
+  const dialog=$("#"+id);if(!dialog)return;
+  if(dialog.open)dialog.close();dialog.classList.remove("open");
+}
+function openIdentityUserDrawer(userId) {
+  const user=state.identityUsers.find(function(item){return item.id===userId;});
+  $("#createUserForm").reset();$("#identityUserId").value=user?user.id:"";$("#newUsername").value=user?user.username:"";$("#newUsername").readOnly=Boolean(user);
+  $("#newUserDisplayName").value=user?user.display_name:"";$("#newUserPassword").required=!user;$("#newUserSuperuser").checked=Boolean(user&&user.is_superuser);$("#newUserActive").checked=user?Boolean(user.is_active):true;$("#newUserActive").disabled=Boolean(user&&state.identity&&state.identity.user&&user.id===state.identity.user.id);
+  $("#identityUserDrawerTitle").textContent=user?"编辑用户":"新增用户";$("#identityUserDrawerHint").textContent=user?"可修改姓名、密码、平台角色和账号状态。":"创建后可按项目分配角色和操作范围。";
+  $("#identityUserPasswordLabel").textContent=user?"重置密码（可选）":"初始密码";$("#identityUserPasswordHint").textContent=user?"不填写则保留当前密码；填写后旧登录会话会失效。":"密码只会以哈希形式保存。";
+  $("#identityUserActiveHint").textContent=$("#newUserActive").disabled?"不能在当前会话中停用自己的账号。":"关闭后会立即撤销该用户的全部登录会话。";
+  $("#newUserPassword").placeholder=user?"不修改请留空":"至少 12 位，并包含三类字符";$("#identityUserActiveRow").classList.toggle("hidden",!user);$("#identityUserSubmitButton").textContent=user?"保存修改":"创建用户";
+  showIdentityDrawer("identityUserDrawer");setTimeout(function(){$("#newUsername").focus();},0);
+}
+function openIdentityProjectDrawer(projectId) {
+  const project=state.identityProjects.find(function(item){return item.id===projectId;});
+  $("#createProjectForm").reset();$("#identityProjectId").value=project?project.id:"";$("#newProjectKey").value=project?project.project_key:"";$("#newProjectKey").readOnly=Boolean(project);
+  $("#newProjectName").value=project?project.name:"";$("#newProjectDescription").value=project?project.description||"":"";$("#newProjectActive").checked=project?Boolean(project.is_active):true;$("#newProjectActive").disabled=Boolean(project&&project.id===state.projectId);
+  $("#identityProjectDrawerTitle").textContent=project?"编辑项目":"新增项目";$("#identityProjectActiveRow").classList.toggle("hidden",!project);$("#identityProjectSubmitButton").textContent=project?"保存修改":"创建项目";
+  $("#identityProjectActiveHint").textContent=$("#newProjectActive").disabled?"请先切换到其他项目，再停用当前项目。":"停用后该项目不再进入日常项目选择。";
+  showIdentityDrawer("identityProjectDrawer");setTimeout(function(){$("#newProjectName").focus();},0);
+}
+async function openIdentityMembershipDrawer(projectId) {
+  if(projectId)$("#membershipProjectSelect").value=projectId;
+  showIdentityDrawer("identityMembershipDrawer");
+  await loadIdentityMembers($("#membershipProjectSelect").value);
+}
 async function createIdentityUser(event) {
   event.preventDefault();
   try {
-    await api("/api/identity/users",{method:"POST",body:{username:$("#newUsername").value.trim(),display_name:$("#newUserDisplayName").value.trim(),password:$("#newUserPassword").value,is_superuser:$("#newUserSuperuser").checked}});
-    event.currentTarget.reset();toast("平台用户已创建");await loadIdentityData();
-  } catch(error){toast("创建用户失败："+error.message,true);}
+    const userId=$("#identityUserId").value,payload={display_name:$("#newUserDisplayName").value.trim(),is_superuser:$("#newUserSuperuser").checked};
+    if(userId){payload.is_active=$("#newUserActive").checked;if($("#newUserPassword").value)payload.password=$("#newUserPassword").value;}
+    else {payload.username=$("#newUsername").value.trim();payload.password=$("#newUserPassword").value;}
+    await api(userId?"/api/identity/users/"+encodeURIComponent(userId):"/api/identity/users",{method:userId?"PATCH":"POST",body:payload});
+    event.currentTarget.reset();closeIdentityDrawer("identityUserDrawer");toast(userId?"用户信息已更新":"平台用户已创建");await loadIdentityData();
+  } catch(error){toast(($("#identityUserId").value?"更新":"创建")+"用户失败："+error.message,true);}
 }
 async function createIdentityProject(event) {
   event.preventDefault();
   try {
-    const project=await api("/api/identity/projects",{method:"POST",body:{project_key:$("#newProjectKey").value.trim(),name:$("#newProjectName").value.trim(),description:$("#newProjectDescription").value.trim()}});
-    event.currentTarget.reset();
-    await switchProject(project.id,"dashboard");
-  } catch(error){toast("创建项目失败："+error.message,true);}
+    const projectId=$("#identityProjectId").value,payload={name:$("#newProjectName").value.trim(),description:$("#newProjectDescription").value.trim()};
+    if(projectId)payload.is_active=$("#newProjectActive").checked;else payload.project_key=$("#newProjectKey").value.trim();
+    const project=await api(projectId?"/api/identity/projects/"+encodeURIComponent(projectId):"/api/identity/projects",{method:projectId?"PATCH":"POST",body:payload});
+    event.currentTarget.reset();closeIdentityDrawer("identityProjectDrawer");
+    if(projectId){toast("项目信息已更新");await loadIdentityData();}else await switchProject(project.id,"dashboard");
+  } catch(error){toast(($("#identityProjectId").value?"更新":"创建")+"项目失败："+error.message,true);}
 }
 async function saveMembership(event) {
   event.preventDefault();
@@ -2573,7 +2816,7 @@ function bind() {
   $("#mainNav").addEventListener("click",function(event){const button=event.target.closest("[data-view]");if(button)gotoView(button.dataset.view);});
   document.body.addEventListener("click",function(event){
     const workspaceTab=event.target.closest("[data-workspace-tab]");
-    if(workspaceTab) activateWorkspaceTab(workspaceTab.dataset.workspaceTab,workspaceTab.dataset.workspaceTarget);
+    if(workspaceTab){activateWorkspaceTab(workspaceTab.dataset.workspaceTab,workspaceTab.dataset.workspaceTarget);if(workspaceTab.dataset.workspaceTab==="evaluation"&&workspaceTab.dataset.workspaceTarget==="report")loadEvaluationReport(false);if(workspaceTab.dataset.workspaceTab==="evaluation"&&workspaceTab.dataset.workspaceTarget==="suites")refreshEvaluationSuites();if(workspaceTab.dataset.workspaceTab==="evaluation"&&workspaceTab.dataset.workspaceTarget==="comparison")renderEvaluationComparison();}
     const interfaceWorkspaceTarget=event.target.closest("[data-interface-workspace-target]");if(interfaceWorkspaceTarget)activateWorkspaceTab("interfaces",interfaceWorkspaceTarget.dataset.interfaceWorkspaceTarget);
     const goto=event.target.closest("[data-goto]");if(goto)gotoView(goto.dataset.goto);
     const run=event.target.closest(".run-open");if(run){state.monitorRunId=run.dataset.id;populateRunSelects();gotoView("monitor");}
@@ -2584,8 +2827,14 @@ function bind() {
     const edit=event.target.closest("[data-model-edit]");if(edit)editModel(edit.dataset.modelEdit);
     const test=event.target.closest("[data-model-test]");if(test)modelAction(test.dataset.modelTest,"test",test);
     const activate=event.target.closest("[data-model-activate]");if(activate)modelAction(activate.dataset.modelActivate,"activate",activate);
-    const evaluationOpen=event.target.closest("[data-evaluation-open]");if(evaluationOpen){state.selectedEvaluationRunId=evaluationOpen.dataset.evaluationOpen;refreshSelectedEvaluationRun();}
+    const evaluationOpen=event.target.closest("[data-evaluation-open]");if(evaluationOpen){state.selectedEvaluationRunId=evaluationOpen.dataset.evaluationOpen;showEvaluationWorkspace("detail");refreshSelectedEvaluationRun();}
+    const evaluationReport=event.target.closest("[data-evaluation-report]");if(evaluationReport)openEvaluationReport(evaluationReport.dataset.evaluationReport);
     const evaluationStop=event.target.closest("[data-evaluation-stop]");if(evaluationStop)stopEvaluationRun(evaluationStop.dataset.evaluationStop);
+    const evaluationDelete=event.target.closest("[data-evaluation-delete]");if(evaluationDelete)deleteEvaluationRun(evaluationDelete.dataset.evaluationDelete);
+    const evaluationClone=event.target.closest("[data-evaluation-suite-clone]");if(evaluationClone)cloneEvaluationSuite(evaluationClone.dataset.evaluationSuiteClone);
+    const evaluationImport=event.target.closest("[data-evaluation-suite-import]");if(evaluationImport)importEvaluationSuite(evaluationImport.dataset.evaluationSuiteImport,evaluationImport);
+    const evaluationReview=event.target.closest("[data-evaluation-review]");if(evaluationReview)openEvaluationReview(evaluationReview.dataset.evaluationReview,evaluationReview.dataset.evaluationReviewName);
+    const evaluationReviewClose=event.target.closest("[data-evaluation-review-close]");if(evaluationReviewClose)closeEvaluationReview();
     const stressStop=event.target.closest(".stress-stop");if(stressStop)stopStressJob(stressStop.dataset.id);
     const stressRetry=event.target.closest(".stress-retry");if(stressRetry)retryStressJob(stressRetry.dataset.id);
     const stressDownload=event.target.closest(".stress-download");if(stressDownload)downloadStressReport(stressDownload.dataset.format,stressDownload.dataset.id);
@@ -2598,7 +2847,13 @@ function bind() {
     const serverConnect=event.target.closest("[data-server-connect]");if(serverConnect)connectSavedServer(serverConnect.dataset.serverConnect);
     const serverDelete=event.target.closest("[data-server-delete]");if(serverDelete)deleteServerProfile(serverDelete.dataset.serverDelete);
     const sessionOpen=event.target.closest("[data-session-open]");if(sessionOpen)openServerSession(sessionOpen.dataset.sessionOpen);
+    const identityTab=event.target.closest("[data-identity-tab]");if(identityTab)activateIdentityTab(identityTab.dataset.identityTab);
+    const identityOpen=event.target.closest("[data-identity-open]");if(identityOpen){if(identityOpen.dataset.identityOpen==="user")openIdentityUserDrawer("");if(identityOpen.dataset.identityOpen==="project")openIdentityProjectDrawer("");}
+    const identityClose=event.target.closest("[data-identity-close]");if(identityClose)closeIdentityDrawer(identityClose.dataset.identityClose);
+    const userEdit=event.target.closest("[data-user-edit]");if(userEdit)openIdentityUserDrawer(userEdit.dataset.userEdit);
     const userToggle=event.target.closest("[data-user-toggle]");if(userToggle)toggleIdentityUser(userToggle.dataset.userToggle,userToggle.dataset.nextActive==="true");
+    const projectEdit=event.target.closest("[data-project-edit]");if(projectEdit)openIdentityProjectDrawer(projectEdit.dataset.projectEdit);
+    const projectMembers=event.target.closest("[data-project-members]");if(projectMembers)openIdentityMembershipDrawer(projectMembers.dataset.projectMembers);
     const memberRemove=event.target.closest("[data-member-remove]");if(memberRemove)removeMembership(memberRemove.dataset.memberRemove);
     const interfaceModule=event.target.closest("[data-interface-module]");if(interfaceModule)selectInterfaceModule(interfaceModule.dataset.interfaceModule);
     const interfaceModuleEdit=event.target.closest("[data-interface-module-edit]");if(interfaceModuleEdit)openInterfaceModuleEditor(interfaceModuleEdit.dataset.interfaceModuleEdit);
@@ -2631,6 +2886,8 @@ function bind() {
     const interfaceDialogClose=event.target.closest("[data-interface-dialog-close]");if(interfaceDialogClose)closeInterfaceDialog(interfaceDialogClose.dataset.interfaceDialogClose);
   });
   document.body.addEventListener("change",function(event){
+    const comparisonRun=event.target.closest("[data-evaluation-comparison-run]");if(comparisonRun){const id=comparisonRun.dataset.evaluationComparisonRun;state.selectedEvaluationComparisonRunIds=comparisonRun.checked?Array.from(new Set(state.selectedEvaluationComparisonRunIds.concat(id))):state.selectedEvaluationComparisonRunIds.filter(function(item){return item!==id;});state.evaluationComparisonResult=null;renderEvaluationComparison();}
+    if(event.target.matches("#evaluationSuiteVersion"))syncEvaluationForm();
     const selected=event.target.closest("[data-interface-scenario-select]");if(selected){const id=selected.dataset.interfaceScenarioSelect;state.selectedInterfaceScenarioIds=selected.checked?Array.from(new Set(state.selectedInterfaceScenarioIds.concat(id))):state.selectedInterfaceScenarioIds.filter(function(item){return item!==id;});renderInterfaceScenarios();}
     if(event.target.matches("#interfaceScenarioSelectAll")){state.selectedInterfaceScenarioIds=event.target.checked?state.interfaceScenarios.map(function(item){return item.id;}):[];renderInterfaceScenarios();}
     if(event.target.matches("[data-scenario-step-asset]")){const card=event.target.closest("[data-interface-scenario-step]");const asset=state.interfaces.find(function(item){return item.id===event.target.value;});const name=card&&card.querySelector("[data-scenario-step-name]");if(name&&!name.value.trim()&&asset)name.value=asset.name;const title=card&&card.querySelector("header strong");if(title)title.textContent=name.value.trim()||(asset&&asset.name)||"未命名步骤";}
@@ -2679,10 +2936,23 @@ function bind() {
   $("#refreshReportsButton").addEventListener("click",loadReports);
   $("#modelForm").addEventListener("submit",submitModel);
   $("#evaluationForm").addEventListener("submit",submitEvaluation);
+  $("#evaluationSuiteForm").addEventListener("submit",createEvaluationSuite);
+  $("#evaluationReviewForm").addEventListener("submit",submitEvaluationReview);
   $("#evaluationRunKind").addEventListener("change",syncEvaluationForm);
+  $("#evaluationJudgeProfile").addEventListener("change",syncEvaluationForm);
   $("#evaluationMaxTokens").addEventListener("input",syncEvaluationForm);
   $("#refreshEvaluationButton").addEventListener("click",function(){loadEvaluationWorkspace(false);});
+  $("#evaluationRunsPrevButton").addEventListener("click",function(){setEvaluationRunsPage(state.evaluationRunsPage-1);});
+  $("#evaluationRunsNextButton").addEventListener("click",function(){setEvaluationRunsPage(state.evaluationRunsPage+1);});
+  $("#evaluationReportCasesPrevButton").addEventListener("click",function(){setEvaluationReportCasesPage(state.evaluationReportCasesPage-1);});
+  $("#evaluationReportCasesNextButton").addEventListener("click",function(){setEvaluationReportCasesPage(state.evaluationReportCasesPage+1);});
+  $("#refreshEvaluationSuitesButton").addEventListener("click",refreshEvaluationSuites);
+  $("#createEvaluationComparisonButton").addEventListener("click",function(){createEvaluationComparison(false);});
   $("#stopEvaluationButton").addEventListener("click",function(){if(state.selectedEvaluationRunId)stopEvaluationRun(state.selectedEvaluationRunId);});
+  $("#deleteEvaluationButton").addEventListener("click",function(){if(state.selectedEvaluationRunId)deleteEvaluationRun(state.selectedEvaluationRunId);});
+  $("#openEvaluationReportButton").addEventListener("click",function(){openEvaluationReport(state.selectedEvaluationRunId);});
+  $("#downloadEvaluationReportDocxButton").addEventListener("click",function(){downloadEvaluationReport("docx");});
+  $("#downloadEvaluationReportPdfButton").addEventListener("click",function(){downloadEvaluationReport("pdf");});
   $("#downloadEvaluationSummaryButton").addEventListener("click",function(){downloadEvaluationArtifact("summary");});
   $("#downloadEvaluationPerformanceButton").addEventListener("click",function(){downloadEvaluationArtifact("performance");});
   $("#interfaceForm").addEventListener("submit",submitInterface);
@@ -2721,7 +2991,22 @@ function bind() {
   $("#refreshAuditButton").addEventListener("click",function(){loadIdentityAudit(1);});
   $("#identityAuditPrevButton").addEventListener("click",function(){loadIdentityAudit(state.identityAuditPage-1);});
   $("#identityAuditNextButton").addEventListener("click",function(){loadIdentityAudit(state.identityAuditPage+1);});
-  document.addEventListener("keydown",function(event){if(event.key==="Escape"){closeServerProfileDrawer();closeGpuDetailDrawer();["interfaceModuleDialog","currentProjectDialog","interfaceEnvironmentDialog","interfaceVariableDialog","interfaceVersionsDialog","interfaceScenarioRunDialog"].forEach(closeInterfaceDialog);}});
+  $("#identityUserSearch").addEventListener("input",function(){state.identityUsersPage=1;renderIdentityUsers();});
+  $("#identityUserRoleFilter").addEventListener("change",function(){state.identityUsersPage=1;renderIdentityUsers();});
+  $("#identityUserStatusFilter").addEventListener("change",function(){state.identityUsersPage=1;renderIdentityUsers();});
+  $("#resetIdentityUserFilters").addEventListener("click",function(){$("#identityUserSearch").value="";$("#identityUserRoleFilter").value="all";$("#identityUserStatusFilter").value="all";state.identityUsersPage=1;renderIdentityUsers();});
+  $("#identityUsersPrevButton").addEventListener("click",function(){state.identityUsersPage-=1;renderIdentityUsers();});
+  $("#identityUsersNextButton").addEventListener("click",function(){state.identityUsersPage+=1;renderIdentityUsers();});
+  $("#identityProjectSearch").addEventListener("input",function(){state.identityProjectsPage=1;renderIdentityProjects();});
+  $("#identityProjectStatusFilter").addEventListener("change",function(){state.identityProjectsPage=1;renderIdentityProjects();});
+  $("#resetIdentityProjectFilters").addEventListener("click",function(){$("#identityProjectSearch").value="";$("#identityProjectStatusFilter").value="all";state.identityProjectsPage=1;renderIdentityProjects();});
+  $("#identityProjectsPrevButton").addEventListener("click",function(){state.identityProjectsPage-=1;renderIdentityProjects();});
+  $("#identityProjectsNextButton").addEventListener("click",function(){state.identityProjectsPage+=1;renderIdentityProjects();});
+  $("#identityRoleSearch").addEventListener("input",function(){state.identityRolesPage=1;renderIdentityRoles();});
+  $("#resetIdentityRoleFilters").addEventListener("click",function(){$("#identityRoleSearch").value="";state.identityRolesPage=1;renderIdentityRoles();});
+  $("#identityRolesPrevButton").addEventListener("click",function(){state.identityRolesPage-=1;renderIdentityRoles();});
+  $("#identityRolesNextButton").addEventListener("click",function(){state.identityRolesPage+=1;renderIdentityRoles();});
+  document.addEventListener("keydown",function(event){if(event.key==="Escape"){closeServerProfileDrawer();closeGpuDetailDrawer();["interfaceModuleDialog","currentProjectDialog","interfaceEnvironmentDialog","interfaceVariableDialog","interfaceVersionsDialog","interfaceScenarioRunDialog"].forEach(closeInterfaceDialog);["identityUserDrawer","identityProjectDrawer","identityMembershipDrawer"].forEach(closeIdentityDrawer);}});
   window.addEventListener("resize",function(){const run=state.runs.find(function(x){return x.id===state.monitorRunId;});if(run)renderMonitor(run);const session=state.serverSessions.find(function(x){return x.id===state.serverSessionId;});if(session)renderServerSessionMetrics(session);});
 }
 document.addEventListener("DOMContentLoaded",function(){

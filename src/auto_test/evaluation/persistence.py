@@ -99,6 +99,32 @@ class ModelEvaluationStoreMixin:
         item["attempt"] = int(item.get("attempt") or 1)
         return item
 
+    @staticmethod
+    def _decode_model_eval_review(row) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        try:
+            item["score"] = json.loads(item.pop("score_json") or "{}")
+        except (TypeError, ValueError):
+            item["score"] = {}
+        return item
+
+    @staticmethod
+    def _decode_model_eval_comparison(row) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        for source, target, fallback in (
+            ("run_ids_json", "run_ids", []),
+            ("config_json", "config", {}),
+        ):
+            try:
+                item[target] = json.loads(item.pop(source) or json.dumps(fallback))
+            except (TypeError, ValueError):
+                item[target] = fallback
+        return item
+
     def save_model_eval_suite(
         self,
         project_id: str | None,
@@ -367,6 +393,7 @@ class ModelEvaluationStoreMixin:
         phase: str | None = None,
         progress: int | None = None,
         message: str | None = None,
+        summary: dict[str, Any] | None = None,
     ) -> None:
         assignments: list[str] = []
         values: list[Any] = []
@@ -379,6 +406,11 @@ class ModelEvaluationStoreMixin:
             if value is not None:
                 assignments.append(f"{column}=?")
                 values.append(value)
+        if summary is not None:
+            normalized_summary = dict(summary)
+            assert_secret_free(normalized_summary, path="model_eval_run.summary")
+            assignments.append("summary_json=?")
+            values.append(_canonical_json(normalized_summary))
         if not assignments:
             return
         with self._connection() as connection:
@@ -496,6 +528,19 @@ class ModelEvaluationStoreMixin:
             ).fetchone()
         return self._decode_model_eval_run(row)
 
+    def set_model_eval_run_artifact_ref(
+        self, project_id: str, run_id: str, artifact_ref: str
+    ) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            updated = connection.execute(
+                """UPDATE model_eval_runs SET artifact_ref=?
+                   WHERE id=? AND project_id=?""",
+                (str(artifact_ref or "")[:2000], run_id, project_id),
+            ).rowcount
+        if not updated:
+            return None
+        return self.get_model_eval_run(project_id, run_id)
+
     def list_model_eval_runs(
         self, project_id: str, limit: int = 100
     ) -> list[dict[str, Any]]:
@@ -512,6 +557,28 @@ class ModelEvaluationStoreMixin:
         return [
             self._decode_model_eval_run(row, include_snapshot=True) or {} for row in rows
         ]
+
+    def delete_model_eval_run(
+        self, project_id: str, run_id: str
+    ) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM model_eval_runs WHERE id=? AND project_id=?",
+                (run_id, project_id),
+            ).fetchone()
+            run = self._decode_model_eval_run(row)
+            if not run:
+                return None
+            if str(run.get("status") or "") not in {"completed", "failed", "stopped"}:
+                raise ValueError("运行中的评测不能删除，请先停止任务")
+            deleted = connection.execute(
+                """DELETE FROM model_eval_runs WHERE id=? AND project_id=?
+                   AND status IN ('completed','failed','stopped')""",
+                (run_id, project_id),
+            ).rowcount
+            if not deleted:
+                raise ValueError("评测状态已变化，请刷新后重试")
+        return run
 
     def list_model_eval_run_events(
         self, project_id: str, run_id: str, after_id: int = 0, limit: int = 1000
@@ -608,3 +675,182 @@ class ModelEvaluationStoreMixin:
             [self._decode_model_eval_case_result(row) or {} for row in rows],
             int(count_row["total"] or 0) if count_row else 0,
         )
+
+    def save_model_eval_manual_review(
+        self,
+        project_id: str,
+        run_id: str,
+        result_id: str,
+        *,
+        reviewer_id: str,
+        score: dict[str, Any],
+        comment: str = "",
+    ) -> dict[str, Any]:
+        score = dict(score or {})
+        assert_secret_free(score, path="model_eval_manual_review.score")
+        numeric = max(0.0, min(float(score.get("score") or 0.0), 1.0))
+        score["score"] = numeric
+        now = time.time()
+        review_id = uuid.uuid4().hex
+        with self._connection() as connection:
+            result_row = connection.execute(
+                """SELECT r.* FROM model_eval_case_results r
+                   JOIN model_eval_runs run ON run.id=r.run_id
+                   WHERE r.id=? AND r.run_id=? AND run.project_id=?""",
+                (result_id, run_id, project_id),
+            ).fetchone()
+            if not result_row:
+                raise KeyError(result_id)
+            run_row = connection.execute(
+                "SELECT summary_json FROM model_eval_runs WHERE id=? AND project_id=?",
+                (run_id, project_id),
+            ).fetchone()
+            connection.execute(
+                """INSERT INTO model_eval_manual_reviews(
+                   id,result_id,reviewer_id,score_json,comment,created_at
+                   ) VALUES(?,?,?,?,?,?)""",
+                (review_id, result_id, str(reviewer_id or ""), _canonical_json(score), str(comment or "")[:4000], now),
+            )
+            try:
+                original_score = json.loads(result_row["score_json"] or "{}")
+            except (TypeError, ValueError):
+                original_score = {}
+            rule_score = max(0.0, min(float(original_score.get("rule_score", original_score.get("score") or 0.0)), 1.0))
+            original_score.setdefault("rule_score", rule_score)
+            effective = min(rule_score, numeric) if original_score.get("passed") is False else numeric
+            original_score.update(
+                {
+                    "score": effective,
+                    "manual_review": {
+                        "status": "completed",
+                        "score": numeric,
+                        "review_id": review_id,
+                        "reviewer_id": str(reviewer_id or ""),
+                        "comment": str(comment or "")[:1000],
+                    },
+                    "scoring_source": "rules_judge_and_manual_review",
+                    "confidence": 1.0,
+                }
+            )
+            connection.execute(
+                "UPDATE model_eval_case_results SET score_json=? WHERE id=?",
+                (_canonical_json(original_score), result_id),
+            )
+            score_rows = connection.execute(
+                "SELECT id,score_json FROM model_eval_case_results WHERE run_id=?",
+                (run_id,),
+            ).fetchall()
+            scores: list[float] = []
+            reviewed = 0
+            pending = 0
+            for row in score_rows:
+                try:
+                    detail = json.loads(row["score_json"] or "{}")
+                except (TypeError, ValueError):
+                    detail = {}
+                if detail.get("score") is not None:
+                    scores.append(float(detail["score"]))
+                if (detail.get("manual_review") or {}).get("status") == "completed":
+                    reviewed += 1
+                elif (detail.get("manual_review") or {}).get("status") == "pending":
+                    pending += 1
+            try:
+                summary = json.loads(run_row["summary_json"] or "{}") if run_row else {}
+            except (TypeError, ValueError):
+                summary = {}
+            summary["quality_score"] = round(sum(scores) / len(scores) * 100, 2) if scores else None
+            scoring = dict(summary.get("scoring") or {})
+            scoring.update(
+                {
+                    "manual_reviewed_cases": reviewed,
+                    "pending_manual_review_cases": pending,
+                    "confidence": 100.0 if reviewed == len(score_rows) and score_rows else scoring.get("confidence"),
+                }
+            )
+            summary["scoring"] = scoring
+            connection.execute(
+                "UPDATE model_eval_runs SET summary_json=? WHERE id=? AND project_id=?",
+                (_canonical_json(summary), run_id, project_id),
+            )
+            review_row = connection.execute(
+                "SELECT * FROM model_eval_manual_reviews WHERE id=?", (review_id,)
+            ).fetchone()
+        return self._decode_model_eval_review(review_row) or {}
+
+    def list_model_eval_manual_reviews(
+        self, project_id: str, run_id: str, result_id: str = ""
+    ) -> list[dict[str, Any]]:
+        where = "run.id=? AND run.project_id=?"
+        params: list[Any] = [run_id, project_id]
+        if result_id:
+            where += " AND review.result_id=?"
+            params.append(result_id)
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"""SELECT review.* FROM model_eval_manual_reviews review
+                    JOIN model_eval_case_results result ON result.id=review.result_id
+                    JOIN model_eval_runs run ON run.id=result.run_id
+                    WHERE {where} ORDER BY review.created_at DESC,review.id DESC""",
+                tuple(params),
+            ).fetchall()
+        return [self._decode_model_eval_review(row) or {} for row in rows]
+
+    def create_model_eval_comparison(
+        self,
+        project_id: str,
+        run_ids: list[str],
+        config: dict[str, Any],
+        *,
+        created_by: str = "",
+    ) -> dict[str, Any]:
+        normalized = list(dict.fromkeys(str(item) for item in run_ids if str(item)))
+        if len(normalized) < 2 or len(normalized) > 10:
+            raise ValueError("模型对比需要选择 2～10 个运行")
+        config = dict(config or {})
+        assert_secret_free(config, path="model_eval_comparison.config")
+        with self._connection() as connection:
+            placeholders = ",".join("?" for _ in normalized)
+            rows = connection.execute(
+                f"SELECT id,status FROM model_eval_runs WHERE project_id=? AND id IN ({placeholders})",
+                (project_id, *normalized),
+            ).fetchall()
+            if len(rows) != len(normalized):
+                raise KeyError("comparison runs")
+            if any(str(row["status"]) not in {"completed", "failed", "stopped"} for row in rows):
+                raise ValueError("只能对比已结束的评测运行")
+            comparison_id = uuid.uuid4().hex
+            connection.execute(
+                """INSERT INTO model_eval_comparisons(
+                   id,project_id,run_ids_json,config_json,created_by,created_at
+                   ) VALUES(?,?,?,?,?,?)""",
+                (
+                    comparison_id,
+                    project_id,
+                    _canonical_json(normalized),
+                    _canonical_json(config),
+                    str(created_by or ""),
+                    time.time(),
+                ),
+            )
+        return self.get_model_eval_comparison(project_id, comparison_id) or {}
+
+    def get_model_eval_comparison(
+        self, project_id: str, comparison_id: str
+    ) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM model_eval_comparisons WHERE id=? AND project_id=?",
+                (comparison_id, project_id),
+            ).fetchone()
+        return self._decode_model_eval_comparison(row)
+
+    def list_model_eval_comparisons(
+        self, project_id: str, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM model_eval_comparisons WHERE project_id=?
+                   ORDER BY created_at DESC,id DESC LIMIT ?""",
+                (project_id, max(1, min(int(limit), 500))),
+            ).fetchall()
+        return [self._decode_model_eval_comparison(row) or {} for row in rows]

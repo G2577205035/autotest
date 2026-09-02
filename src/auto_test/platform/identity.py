@@ -720,7 +720,15 @@ def _required_permission(method: str, path: str) -> str:
         r"/api/interface-scenarios/[^/]+/execute", path
     ):
         return "test:execute"
+    if method == "DELETE" and re.fullmatch(r"/api/model-evaluation/runs/[^/]+", path):
+        return "evaluation:manage"
+    if method == "POST" and re.fullmatch(
+        r"/api/model-evaluation/runs/[^/]+/results/[^/]+/reviews", path
+    ):
+        return "evaluation:manage"
     if path.startswith("/api/model-evaluation/runs"):
+        return "evaluation:operate"
+    if path.startswith("/api/model-evaluation/comparisons"):
         return "evaluation:operate"
     if path.startswith("/api/model-evaluation/suites"):
         return "evaluation:manage"

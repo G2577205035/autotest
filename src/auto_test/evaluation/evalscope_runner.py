@@ -21,7 +21,9 @@ def _emit(event_type: str, message: str, *, phase: str, progress: int | None = N
                 "progress": progress,
                 "data": data,
             },
-            ensure_ascii=False,
+            # Keep the event transport ASCII-only. The parent decodes the JSON
+            # escapes back to Unicode, independent of the host console code page.
+            ensure_ascii=True,
         ),
         flush=True,
     )

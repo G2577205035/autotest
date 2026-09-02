@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from difflib import SequenceMatcher
 from typing import Any
 
 
@@ -51,8 +52,23 @@ def score_response(text: str, rules: dict[str, Any] | None) -> dict[str, Any]:
     if "exact_text" in rules:
         expected = str(rules.get("exact_text") or "").strip()
         check("固定表达", value == expected, expected)
-    for term in list(rules.get("required_terms") or rules.get("required_facts") or []):
-        check(f"必须包含：{term}", str(term) in value, str(term))
+    for term in list(rules.get("required_terms") or []):
+        check(f"术语保持：{term}", str(term).casefold() in value.casefold(), str(term))
+    for fact in list(rules.get("required_facts") or []):
+        check(f"事实覆盖：{fact}", str(fact).casefold() in value.casefold(), str(fact))
+    for entity in list(rules.get("required_entities") or []):
+        check(f"实体保持：{entity}", str(entity).casefold() in value.casefold(), str(entity))
+    for number in list(rules.get("required_numbers") or []):
+        check(f"数字保持：{number}", str(number) in value, str(number))
+    for unit in list(rules.get("required_units") or []):
+        check(f"单位保持：{unit}", str(unit).casefold() in value.casefold(), str(unit))
+    for span in list(rules.get("protected_spans") or []):
+        check(f"保护片段：{span}", str(span) in value, str(span))
+    for marker in list(rules.get("required_format") or rules.get("format_markers") or []):
+        check(f"格式保持：{marker}", str(marker) in value, str(marker))
+    for section in list(rules.get("required_sections") or []):
+        pattern = rf"(?:^|\n)[ \t]*(?:#+[ \t]*)?{re.escape(str(section))}[ \t]*(?::|：)?[ \t]*(?=\n|$)"
+        check(f"章节结构：{section}", re.search(pattern, value, re.I) is not None, str(section))
     for term in list(rules.get("forbidden_terms") or []):
         check(f"禁止包含：{term}", str(term) not in value, str(term))
     for pattern in list(rules.get("required_patterns") or []):
@@ -61,6 +77,22 @@ def score_response(text: str, rules: dict[str, Any] | None) -> dict[str, Any]:
         except re.error:
             passed = False
         check(f"正则匹配：{pattern}", passed, str(pattern))
+    allowed_numbers = rules.get("allowed_numbers")
+    if isinstance(allowed_numbers, list):
+        allowed = {str(item) for item in allowed_numbers}
+        observed_numbers = set(re.findall(r"(?<![A-Za-z])\d+(?:[.,]\d+)*(?:%|％)?", value))
+        unsupported = sorted(observed_numbers - allowed)
+        check("无依据数字", not unsupported, sorted(allowed))
+    references = rules.get("references")
+    if isinstance(references, list) and references:
+        similarities = [
+            SequenceMatcher(None, value.casefold(), str(reference).strip().casefold()).ratio()
+            for reference in references
+            if str(reference).strip()
+        ]
+        if similarities:
+            minimum = max(0.0, min(float(rules.get("min_reference_similarity") or 0.2), 1.0))
+            check("多参考译文相似度", max(similarities) >= minimum, minimum)
     if rules.get("min_chars") is not None:
         minimum = max(0, int(rules["min_chars"]))
         check("最少字符", len(value) >= minimum, minimum)
@@ -94,5 +126,6 @@ def score_response(text: str, rules: dict[str, Any] | None) -> dict[str, Any]:
         "passed_checks": passed_count,
         "total_checks": len(checks),
         "checks": checks,
+        "failed_checks": [item["name"] for item in checks if not item["passed"]],
         "scoring_source": "deterministic_rules",
     }

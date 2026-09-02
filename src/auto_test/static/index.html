@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <title>烈马自动化测试平台</title>
   <link rel="icon" type="image/png" href="/static/assets/liema-favicon.png">
-  <link rel="stylesheet" href="/static/styles.css?v=20260902.1">
+  <link rel="stylesheet" href="/static/styles.css?v=20260902.9">
 </head>
 <body>
   <div class="auth-overlay" id="authOverlay" data-mode="login">
@@ -370,13 +370,23 @@
           <div><span>当前项目运行</span><strong id="evaluationRunCount">0 次</strong></div>
           <p id="evaluationRuntimeHint">EvalScope 在独立 Python 3.11 子进程运行；平台 Web 不加载其依赖。</p>
         </div>
-        <div class="evaluation-layout">
+        <div class="page-tabs workspace-tabs evaluation-workspace-tabs" id="evaluationWorkspaceTabs" role="tablist" aria-label="模型评测工作区">
+          <button class="active" type="button" data-workspace-tab="evaluation" data-workspace-target="runs" role="tab" aria-selected="true">评测运行</button>
+          <button type="button" data-workspace-tab="evaluation" data-workspace-target="detail" role="tab" aria-selected="false">任务详情</button>
+          <button type="button" data-workspace-tab="evaluation" data-workspace-target="suites" role="tab" aria-selected="false">测试集管理</button>
+          <button type="button" data-workspace-tab="evaluation" data-workspace-target="comparison" role="tab" aria-selected="false">模型对比</button>
+          <button type="button" data-workspace-tab="evaluation" data-workspace-target="report" role="tab" aria-selected="false">评测报告</button>
+        </div>
+        <div data-workspace-panel="evaluation" data-workspace-name="runs">
+          <div class="evaluation-layout">
           <form class="panel evaluation-launch-panel" id="evaluationForm">
             <div class="panel-head"><div><p class="eyebrow">NEW EVALUATION</p><h3>新建模型评测</h3></div><span class="step-chip">项目隔离</span></div>
-            <label class="field"><span>评测类型</span><select id="evaluationRunKind"><option value="mock">Mock 流程验证</option><option value="foundation">基础能力与鲁棒性</option><option value="standard_benchmark">标准 Benchmark</option><option value="concurrency">并发阶梯</option></select><small id="evaluationRunKindHint">不调用真实模型，用于验证排队、监控、停止和结果链路。</small></label>
+            <label class="field"><span>评测类型</span><select id="evaluationRunKind"><option value="mock">Mock 流程验证</option><option value="mock_full">完整进阶流程验证</option><option value="foundation">基础能力与鲁棒性</option><option value="translation">中英双向翻译</option><option value="wmt_translation">WMT2024++ 标准翻译</option><option value="report_writing">报告写作能力</option><option value="intelligence">情报生产能力</option><option value="standard_benchmark">标准 Benchmark</option><option value="concurrency">并发阶梯</option><option value="deep_performance">深度性能与容量</option><option value="custom">项目自定义测试集</option></select><small id="evaluationRunKindHint">不调用真实模型，用于验证排队、监控、停止和结果链路。</small></label>
             <label class="field"><span>被测模型</span><select id="evaluationModelProfile"><option value="">Mock 不需要选择模型</option></select><small>模型地址只能来自“模型配置”，页面不会读取或回显 API Key。</small></label>
-            <div class="form-grid two"><label class="field"><span>运行方案</span><select id="evaluationPlan"><option value="quick">快速体检</option><option value="standard">标准评测</option></select></label><label class="field"><span>最大输出 Tokens</span><input id="evaluationMaxTokens" type="number" min="8" max="8192" value="256"></label></div>
+            <label class="field hidden" id="evaluationCustomSuiteField"><span>项目测试集版本</span><select id="evaluationSuiteVersion"><option value="">请选择已发布的项目测试集</option></select><small>版本发布后内容和哈希不可变。</small></label>
+            <div class="form-grid two"><label class="field"><span>运行方案</span><select id="evaluationPlan"><option value="quick">快速体检</option><option value="standard">标准评测</option><option value="deep">深度评测</option></select></label><label class="field"><span>最大输出 Tokens</span><input id="evaluationMaxTokens" type="number" min="8" max="8192" value="256"></label></div>
             <div class="form-grid two"><label class="field"><span>单请求超时（秒）</span><input id="evaluationTimeout" type="number" min="1" max="600" value="60"></label><label class="switch-row evaluation-stream-switch"><input id="evaluationStream" type="checkbox"><span><b>使用流式调用</b><small>首个非空正文分片用于 TTFT。</small></span></label></div>
+            <details class="advanced-options evaluation-advanced-options"><summary>评分、人工复核与资源关联</summary><div class="advanced-grid"><label class="field"><span>独立裁判模型</span><select id="evaluationJudgeProfile"><option value="">不使用裁判模型</option></select><small>不能与被测模型相同；无裁判时保留规则分与待人工复核状态。</small></label><label class="field"><span>人工复核抽样比例（%）</span><input id="evaluationManualReviewPercent" type="number" min="0" max="100" value="0"></label><label class="field"><span>关联服务器会话</span><select id="evaluationServerSession"><option value="">不关联服务器资源</option></select><small>保存提交时资源基线；深度性能结果展示资源关联可用性。</small></label></div></details>
             <div class="evaluation-submit-note"><i></i><span id="evaluationSubmitNote">Mock 运行不产生真实模型负载。</span></div>
             <button class="button primary wide" id="evaluationSubmitButton" type="submit">提交评测任务</button>
             <p class="form-error" id="evaluationFormError" role="alert"></p>
@@ -384,23 +394,60 @@
           <article class="panel evaluation-runs-panel">
             <div class="panel-head"><div><p class="eyebrow">RECENT RUNS</p><h3>评测运行</h3></div><button class="text-button" id="refreshEvaluationButton" type="button">刷新</button></div>
             <div class="table-wrap"><table><thead><tr><th>类型 / 模型</th><th>方案</th><th>阶段</th><th>进度</th><th>提交时间</th><th>操作</th></tr></thead><tbody id="evaluationRunsBody"></tbody></table></div>
+            <footer class="table-pagination evaluation-runs-pagination" aria-label="模型评测运行分页"><span id="evaluationRunsPageSummary">共 0 条</span><div><button class="text-button" id="evaluationRunsPrevButton" type="button">上一页</button><b id="evaluationRunsPageIndicator">第 1 / 1 页</b><button class="text-button" id="evaluationRunsNextButton" type="button">下一页</button></div></footer>
           </article>
+          </div>
         </div>
-        <article class="panel evaluation-detail-panel" id="evaluationDetailPanel">
-          <div class="panel-head evaluation-detail-head"><div><p class="eyebrow">RUN MONITOR</p><h3 id="evaluationDetailTitle">选择一条评测查看运行监控</h3><p id="evaluationDetailMessage">提交后可在这里查看 Token 来源、吞吐、P95/P99、错误分类与用例明细。</p></div><div class="evaluation-detail-actions"><button class="text-button hidden" id="stopEvaluationButton" type="button">安全停止</button><button class="text-button" id="downloadEvaluationSummaryButton" type="button">JSON 摘要</button><button class="text-button" id="downloadEvaluationPerformanceButton" type="button">CSV 性能</button></div></div>
+        <article class="panel evaluation-detail-panel hidden" id="evaluationDetailPanel" data-workspace-panel="evaluation" data-workspace-name="detail">
+          <div class="panel-head evaluation-detail-head"><div><p class="eyebrow">RUN MONITOR</p><h3 id="evaluationDetailTitle">选择一条评测查看运行监控</h3><p id="evaluationDetailMessage">提交后可在这里查看 Token 来源、吞吐、P95/P99、错误分类与用例明细。</p></div><div><div class="evaluation-detail-actions"><button class="text-button hidden" id="stopEvaluationButton" type="button">安全停止</button><button class="text-button danger hidden" id="deleteEvaluationButton" type="button">删除任务</button><button class="button secondary" id="openEvaluationReportButton" type="button">查看评测报告</button></div><p class="evaluation-artifact-help">报告会解释结论、异常和建议；任务结束后即可生成。</p></div></div>
           <div class="evaluation-progress"><div><span id="evaluationPhaseLabel">尚未选择运行</span><b id="evaluationProgressLabel">0%</b></div><div class="progress-track"><i id="evaluationProgressBar"></i></div></div>
           <div class="evaluation-metric-grid">
-            <div><span>成功率</span><strong id="evaluationSuccessRate">—</strong><small id="evaluationQualityScore">质量分 —</small></div>
+            <div><span>用例达标率</span><strong id="evaluationSuccessRate">—</strong><small id="evaluationQualityScore">质量分 —</small></div>
             <div><span>Token 来源</span><strong id="evaluationTokenSource">—</strong><small id="evaluationTokenCount">总量 —</small></div>
             <div><span>P95 / P99</span><strong id="evaluationLatency">—</strong><small>端到端时延</small></div>
             <div><span>输出吞吐</span><strong id="evaluationThroughput">—</strong><small>Token / 秒</small></div>
             <div><span>鲁棒保持值</span><strong id="evaluationRobustness">—</strong><small>平均 / 最差</small></div>
+            <div><span>评分置信度</span><strong id="evaluationScoringConfidence">—</strong><small id="evaluationReviewState">规则 / 裁判 / 人工</small></div>
+            <div><span>稳定容量</span><strong id="evaluationCapacity">—</strong><small id="evaluationCapacityState">并发 / 拐点</small></div>
           </div>
           <div class="evaluation-detail-grid">
             <section class="evaluation-events"><header><h4>阶段事件</h4><span id="evaluationEventCount">0 条</span></header><div id="evaluationEventsList" class="evaluation-events-list"><p class="muted">尚未选择运行。</p></div></section>
-            <section class="evaluation-results"><header><h4>结果明细</h4><span id="evaluationResultCount">0 条</span></header><div class="table-wrap"><table><thead><tr><th>用例</th><th>状态</th><th>Token</th><th>TTFT</th><th>时延</th><th>规则分</th></tr></thead><tbody id="evaluationResultsBody"></tbody></table></div></section>
+            <section class="evaluation-results"><header><h4>结果明细与人工复核</h4><span id="evaluationResultCount">0 条</span></header><div class="table-wrap"><table><thead><tr><th>用例名称</th><th>状态</th><th>Token</th><th>TTFT</th><th>时延</th><th>综合分</th><th>评分来源</th><th>复核</th></tr></thead><tbody id="evaluationResultsBody"></tbody></table></div></section>
           </div>
         </article>
+        <section class="evaluation-management-layout hidden" data-workspace-panel="evaluation" data-workspace-name="suites">
+          <form class="panel" id="evaluationSuiteForm">
+            <div class="panel-head"><div><p class="eyebrow">PROJECT DATASET</p><h3>新建项目测试集</h3></div><span class="step-chip">项目隔离</span></div>
+            <label class="field"><span>测试集名称</span><input id="evaluationSuiteName" maxlength="160" placeholder="例如：脱敏报告写作验收集" required></label>
+            <label class="field"><span>能力分类</span><select id="evaluationSuiteCategory"><option value="custom">通用自定义</option><option value="translation">翻译</option><option value="report_writing">报告写作</option><option value="intelligence">情报生产</option></select></label>
+            <label class="field"><span>说明</span><textarea id="evaluationSuiteDescription" rows="3" maxlength="4000" placeholder="说明素材范围、来源和授权边界"></textarea></label>
+            <button class="button primary wide" type="submit">创建测试集草稿</button><p class="form-error" id="evaluationSuiteFormError"></p>
+          </form>
+          <article class="panel evaluation-suite-list-panel">
+            <div class="panel-head"><div><p class="eyebrow">DATASET LIBRARY</p><h3>内置库与项目库</h3></div><button class="text-button" id="refreshEvaluationSuitesButton" type="button">刷新</button></div>
+            <p class="panel-intro">内置测试集只读；可以复制为项目版本。项目测试集支持 JSON、JSONL、CSV、ZIP、TXT、Markdown、DOCX 和 PDF 导入，导入后自动校验并发布不可变版本。</p>
+            <div id="evaluationSuiteList" class="evaluation-suite-list"></div>
+          </article>
+        </section>
+        <article class="panel evaluation-comparison-panel hidden" data-workspace-panel="evaluation" data-workspace-name="comparison">
+          <div class="panel-head"><div><p class="eyebrow">MODEL COMPARISON</p><h3>同口径模型对比</h3></div><button class="button primary" id="createEvaluationComparisonButton" type="button">生成对比</button></div>
+          <p class="panel-intro">默认只对同测试集哈希、同方案和同参数的已结束任务排名；口径不一致时会先提示，只能确认后并列展示。</p>
+          <div id="evaluationComparisonRunList" class="evaluation-comparison-run-list"></div>
+          <section class="evaluation-comparison-result" id="evaluationComparisonResult"><p class="muted">请选择至少两个已结束运行。</p></section>
+        </article>
+        <article class="panel evaluation-report-panel hidden" id="evaluationReportPanel" data-workspace-panel="evaluation" data-workspace-name="report">
+          <div class="panel-head evaluation-report-head"><div><p class="eyebrow">READABLE REPORT</p><h3 id="evaluationReportTitle">选择一条已结束的评测查看报告</h3><p id="evaluationReportMeta">报告会把指标翻译成可阅读的结论，并说明下一步怎么处理。</p></div><div class="evaluation-report-actions"><button class="button secondary" id="downloadEvaluationReportDocxButton" type="button">下载 Word</button><button class="button secondary" id="downloadEvaluationReportPdfButton" type="button">下载 PDF</button></div></div>
+          <section class="evaluation-report-conclusion info" id="evaluationReportConclusion"><span>结论</span><strong>尚未生成报告</strong><p>请先选择一条已完成、失败或停止的评测任务。</p></section>
+          <div class="evaluation-report-overview" id="evaluationReportOverview"></div>
+          <section class="evaluation-report-section"><header><div><span>01</span><h4>核心指标怎么看</h4></div><p>结果、含义和使用方式放在一起，不需要阅读原始 JSON。</p></header><div class="evaluation-report-metrics" id="evaluationReportMetrics"></div></section>
+          <div class="evaluation-report-columns">
+            <section class="evaluation-report-section"><header><div><span>02</span><h4>发现与解释</h4></div></header><div class="evaluation-report-findings" id="evaluationReportFindings"><p class="muted">暂无内容。</p></div></section>
+            <section class="evaluation-report-section"><header><div><span>03</span><h4>建议下一步</h4></div></header><ol class="evaluation-report-recommendations" id="evaluationReportRecommendations"></ol></section>
+          </div>
+          <section class="evaluation-report-section"><header><div><span>04</span><h4>用例结果</h4></div><p id="evaluationReportCaseSummary">暂无用例数据</p></header><div class="table-wrap evaluation-report-cases"><table><thead><tr><th>用例</th><th>分类</th><th>状态</th><th>综合分</th><th>时延</th></tr></thead><tbody id="evaluationReportCasesBody"><tr><td class="evaluation-empty-row" colspan="5">尚未生成报告。</td></tr></tbody></table></div><footer class="table-pagination evaluation-report-case-pagination" aria-label="评测报告用例分页"><span id="evaluationReportCasesPageSummary">共 0 条</span><div><button class="text-button" id="evaluationReportCasesPrevButton" type="button">上一页</button><b id="evaluationReportCasesPageIndicator">第 1 / 1 页</b><button class="text-button" id="evaluationReportCasesNextButton" type="button">下一页</button></div></footer></section>
+          <details class="evaluation-technical-artifacts"><summary>技术附件（供开发、复核和二次分析）</summary><div><button class="text-button" id="downloadEvaluationSummaryButton" type="button">评测摘要 JSON</button><button class="text-button" id="downloadEvaluationPerformanceButton" type="button">性能明细 CSV</button></div><p>普通阅读请使用上面的报告；JSON/CSV 保留原始结构，适合程序处理和审计留档。</p></details>
+        </article>
+        <dialog class="modal evaluation-review-dialog" id="evaluationReviewDialog"><form method="dialog" id="evaluationReviewForm"><div class="modal-head"><div><p class="eyebrow">HUMAN REVIEW</p><h3 id="evaluationReviewTitle">人工复核</h3></div><button type="button" class="icon-button" data-evaluation-review-close aria-label="关闭">×</button></div><input type="hidden" id="evaluationReviewResultId"><label class="field"><span>人工评分（0～100）</span><input id="evaluationReviewScore" type="number" min="0" max="100" step="1" value="80" required></label><label class="field"><span>复核意见</span><textarea id="evaluationReviewComment" rows="5" maxlength="4000" placeholder="说明事实错误、评分依据或通过理由"></textarea></label><div class="dialog-actions"><button type="button" class="button secondary" data-evaluation-review-close>取消</button><button type="submit" class="button primary">保存复核</button></div><p class="form-error" id="evaluationReviewError"></p></form></dialog>
       </section>
 
       <section class="view" id="view-models">
@@ -583,37 +630,89 @@
       </section>
 
       <section class="view" id="view-identity">
-        <div class="identity-summary stat-grid">
-          <article class="stat-card"><span>平台用户</span><strong id="identityUserCount">—</strong><small>启用及停用账号</small></article>
-          <article class="stat-card"><span>项目空间</span><strong id="identityProjectCount">—</strong><small>项目级权限边界</small></article>
-          <article class="stat-card"><span>平台管理员</span><strong id="identityAdminCount">—</strong><small>跨项目管理权限</small></article>
-          <article class="stat-card"><span>当前项目成员</span><strong id="identityMemberCount">—</strong><small>按角色授权</small></article>
+        <header class="identity-workspace-head">
+          <div><h2>用户管理</h2><p>集中维护平台账号、业务项目、角色边界与安全审计。</p></div>
+          <div class="identity-head-actions"><button class="button secondary hidden" id="newIdentityProjectButton" type="button" data-identity-open="project">＋ 新增项目</button><button class="button primary" id="newIdentityUserButton" type="button" data-identity-open="user">＋ 新增用户</button></div>
+        </header>
+
+        <nav class="identity-tabs" aria-label="用户与权限分类" role="tablist">
+          <button class="active" type="button" role="tab" aria-selected="true" data-identity-tab="users">用户管理</button>
+          <button type="button" role="tab" aria-selected="false" data-identity-tab="projects">项目空间</button>
+          <button type="button" role="tab" aria-selected="false" data-identity-tab="roles">角色权限</button>
+          <button type="button" role="tab" aria-selected="false" data-identity-tab="audit">审计日志</button>
+        </nav>
+
+        <div class="identity-tab-panel active" data-identity-panel="users" role="tabpanel">
+          <article class="panel identity-directory-panel">
+            <div class="identity-filter-toolbar">
+              <label class="identity-search-field"><span aria-hidden="true"></span><input id="identityUserSearch" type="search" placeholder="搜索用户名或姓名" autocomplete="off"></label>
+              <label><span>平台角色</span><select id="identityUserRoleFilter"><option value="all">全部角色</option><option value="platform">平台管理员</option><option value="standard">普通用户</option></select></label>
+              <label><span>账号状态</span><select id="identityUserStatusFilter"><option value="all">全部状态</option><option value="active">正常</option><option value="disabled">已停用</option></select></label>
+              <button class="button ghost" id="resetIdentityUserFilters" type="button">重置</button>
+              <span class="identity-toolbar-note">停用账号会立即撤销其全部登录会话</span>
+            </div>
+            <div class="table-wrap"><table><thead><tr><th>用户</th><th>平台角色</th><th>状态</th><th>最近登录</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="identityUsersBody"></tbody></table></div>
+            <footer class="table-pagination" aria-label="用户列表分页"><span id="identityUsersPageSummary">共 0 条</span><div><button class="text-button" id="identityUsersPrevButton" type="button">上一页</button><b id="identityUsersPageIndicator">第 1 / 1 页</b><button class="text-button" id="identityUsersNextButton" type="button">下一页</button></div></footer>
+          </article>
         </div>
-        <div class="identity-admin-grid">
-          <form class="panel" id="createUserForm">
-            <div class="panel-head"><div><p class="eyebrow">USER DIRECTORY</p><h3>创建平台用户</h3></div><span class="secure-badge">密码哈希</span></div>
-            <div class="form-grid two"><label class="field"><span>用户名</span><input id="newUsername" required placeholder="例如：tester.zhang"></label><label class="field"><span>姓名</span><input id="newUserDisplayName" required placeholder="请输入用户姓名"></label></div>
-            <label class="field"><span>初始密码</span><input id="newUserPassword" type="password" autocomplete="new-password" minlength="12" required placeholder="至少 12 位，并包含三类字符"></label>
-            <label class="switch-row"><input id="newUserSuperuser" type="checkbox"><span><b>授予平台管理员权限</b><small>可跨项目管理用户、项目与平台配置；请谨慎授权。</small></span></label>
-            <button class="button primary wide" type="submit">创建用户</button>
+
+        <div class="identity-tab-panel" data-identity-panel="projects" role="tabpanel">
+          <article class="panel identity-directory-panel">
+            <div class="identity-filter-toolbar compact">
+              <label class="identity-search-field"><span aria-hidden="true"></span><input id="identityProjectSearch" type="search" placeholder="搜索项目名称或标识" autocomplete="off"></label>
+              <label><span>项目状态</span><select id="identityProjectStatusFilter"><option value="all">全部状态</option><option value="active">正常</option><option value="disabled">已停用</option></select></label>
+              <button class="button ghost" id="resetIdentityProjectFilters" type="button">重置</button>
+              <span class="identity-toolbar-note">项目成员按只读、执行和管理三类角色授权</span>
+            </div>
+            <div class="table-wrap"><table><thead><tr><th>项目空间</th><th>项目标识</th><th>状态</th><th>最近更新</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="identityProjectsBody"></tbody></table></div>
+            <footer class="table-pagination" aria-label="项目列表分页"><span id="identityProjectsPageSummary">共 0 条</span><div><button class="text-button" id="identityProjectsPrevButton" type="button">上一页</button><b id="identityProjectsPageIndicator">第 1 / 1 页</b><button class="text-button" id="identityProjectsNextButton" type="button">下一页</button></div></footer>
+          </article>
+        </div>
+
+        <div class="identity-tab-panel" data-identity-panel="roles" role="tabpanel">
+          <article class="panel identity-directory-panel">
+            <div class="identity-filter-toolbar compact">
+              <label class="identity-search-field"><span aria-hidden="true"></span><input id="identityRoleSearch" type="search" placeholder="搜索角色或权限" autocomplete="off"></label>
+              <button class="button ghost" id="resetIdentityRoleFilters" type="button">重置</button>
+              <span class="identity-toolbar-note">固定角色由平台定义，用于保持各项目授权口径一致</span>
+            </div>
+            <div class="table-wrap"><table class="identity-role-table"><thead><tr><th>角色名称</th><th>角色编码</th><th>权限范围</th><th>适用边界</th></tr></thead><tbody id="identityRoleMatrix"></tbody></table></div>
+            <footer class="table-pagination" aria-label="角色列表分页"><span id="identityRolesPageSummary">共 0 条</span><div><button class="text-button" id="identityRolesPrevButton" type="button">上一页</button><b id="identityRolesPageIndicator">第 1 / 1 页</b><button class="text-button" id="identityRolesNextButton" type="button">下一页</button></div></footer>
+          </article>
+        </div>
+
+        <div class="identity-tab-panel" data-identity-panel="audit" role="tabpanel">
+          <article class="panel identity-directory-panel">
+            <div class="identity-filter-toolbar compact audit"><div class="identity-audit-intro"><strong>安全操作记录</strong><span>按时间倒序保存账号、项目和权限变更，便于追溯。</span></div><button class="button ghost" id="refreshAuditButton" type="button">刷新日志</button></div>
+            <div class="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>项目</th><th>动作</th><th>结果</th><th>目标</th></tr></thead><tbody id="identityAuditBody"></tbody></table></div>
+            <footer class="table-pagination" aria-label="审计记录分页"><span id="identityAuditPageSummary">共 0 条</span><div><button class="text-button" id="identityAuditPrevButton" type="button">上一页</button><b id="identityAuditPageIndicator">第 1 / 1 页</b><button class="text-button" id="identityAuditNextButton" type="button">下一页</button></div></footer>
+          </article>
+        </div>
+
+        <dialog class="identity-drawer" id="identityUserDrawer">
+          <form id="createUserForm">
+            <div class="identity-drawer-head"><div><span>平台账号</span><h3 id="identityUserDrawerTitle">新增用户</h3><p id="identityUserDrawerHint">创建后可按项目分配角色和操作范围。</p></div><button type="button" data-identity-close="identityUserDrawer" aria-label="关闭">×</button></div>
+            <div class="identity-drawer-body"><input id="identityUserId" type="hidden"><label class="field"><span>用户名</span><input id="newUsername" required maxlength="64" placeholder="例如：tester.zhang"></label><label class="field"><span>姓名</span><input id="newUserDisplayName" required maxlength="120" placeholder="请输入用户姓名"></label><label class="field"><span id="identityUserPasswordLabel">初始密码</span><input id="newUserPassword" type="password" autocomplete="new-password" minlength="12" required placeholder="至少 12 位，并包含三类字符"><small id="identityUserPasswordHint">密码只会以哈希形式保存。</small></label><label class="switch-row"><input id="newUserSuperuser" type="checkbox"><span><b>授予平台管理员权限</b><small>可跨项目管理用户、项目与平台配置，请谨慎授权。</small></span></label><label class="switch-row hidden" id="identityUserActiveRow"><input id="newUserActive" type="checkbox" checked><span><b>账号保持启用</b><small id="identityUserActiveHint">关闭后会立即撤销该用户的全部登录会话。</small></span></label></div>
+            <div class="identity-drawer-footer"><button class="button ghost" type="button" data-identity-close="identityUserDrawer">取消</button><button class="button primary" id="identityUserSubmitButton" type="submit">创建用户</button></div>
           </form>
-          <form class="panel" id="createProjectForm">
-            <div class="panel-head"><div><p class="eyebrow">PROJECT SPACE</p><h3>创建项目空间</h3></div><span class="step-chip">RBAC</span></div>
-            <div class="form-grid two"><label class="field"><span>项目标识</span><input id="newProjectKey" required placeholder="例如：QA_CORE"></label><label class="field"><span>项目名称</span><input id="newProjectName" required placeholder="请输入项目名称"></label></div>
-            <label class="field"><span>项目说明</span><textarea id="newProjectDescription" rows="4" placeholder="说明测试范围、负责人或环境边界"></textarea></label>
-            <button class="button secondary wide" type="submit">创建项目</button>
+        </dialog>
+
+        <dialog class="identity-drawer" id="identityProjectDrawer">
+          <form id="createProjectForm">
+            <div class="identity-drawer-head"><div><span>业务空间</span><h3 id="identityProjectDrawerTitle">新增项目</h3><p>项目是数据、成员和权限的隔离边界。</p></div><button type="button" data-identity-close="identityProjectDrawer" aria-label="关闭">×</button></div>
+            <div class="identity-drawer-body"><input id="identityProjectId" type="hidden"><label class="field"><span>项目标识</span><input id="newProjectKey" required maxlength="40" placeholder="例如：QA_CORE"></label><label class="field"><span>项目名称</span><input id="newProjectName" required maxlength="120" placeholder="请输入项目名称"></label><label class="field"><span>项目说明</span><textarea id="newProjectDescription" rows="5" maxlength="2000" placeholder="说明测试范围、负责人或环境边界"></textarea></label><label class="switch-row hidden" id="identityProjectActiveRow"><input id="newProjectActive" type="checkbox" checked><span><b>项目保持启用</b><small id="identityProjectActiveHint">停用后该项目不再进入日常项目选择。</small></span></label></div>
+            <div class="identity-drawer-footer"><button class="button ghost" type="button" data-identity-close="identityProjectDrawer">取消</button><button class="button primary" id="identityProjectSubmitButton" type="submit">创建项目</button></div>
           </form>
-        </div>
-        <article class="panel identity-table-panel"><div class="panel-head"><div><p class="eyebrow">USERS</p><h3>用户状态</h3></div><span class="muted">停用用户会立即撤销全部登录会话</span></div><div class="table-wrap"><table><thead><tr><th>用户</th><th>平台角色</th><th>状态</th><th>最近登录</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="identityUsersBody"></tbody></table></div></article>
-        <div class="identity-project-grid">
-          <article class="panel"><div class="panel-head"><div><p class="eyebrow">PROJECT MEMBERS</p><h3>项目成员与角色</h3></div><label class="compact-select"><span>管理项目</span><select id="membershipProjectSelect"></select></label></div><form class="membership-toolbar" id="membershipForm"><label class="field"><span>选择用户</span><select id="membershipUserSelect" required></select></label><label class="field"><span>项目角色</span><select id="membershipRoleSelect"><option value="viewer">只读成员</option><option value="tester">测试执行者</option><option value="project_admin">项目管理员</option></select></label><button class="button secondary" type="submit">保存成员权限</button></form><div class="table-wrap"><table><thead><tr><th>成员</th><th>项目角色</th><th>账号状态</th><th>操作</th></tr></thead><tbody id="identityMembersBody"></tbody></table></div></article>
-          <article class="panel role-matrix-panel"><div class="panel-head"><div><p class="eyebrow">ROLE MATRIX</p><h3>固定角色边界</h3></div></div><div class="role-matrix" id="identityRoleMatrix"></div></article>
-        </div>
-        <article class="panel identity-table-panel"><div class="panel-head"><div><p class="eyebrow">AUDIT TRAIL</p><h3>最近审计记录</h3></div><button class="text-button" id="refreshAuditButton">刷新</button></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>项目</th><th>动作</th><th>结果</th><th>目标</th></tr></thead><tbody id="identityAuditBody"></tbody></table></div><footer class="table-pagination" aria-label="审计记录分页"><span id="identityAuditPageSummary">共 0 条</span><div><button class="text-button" id="identityAuditPrevButton" type="button">上一页</button><b id="identityAuditPageIndicator">第 1 / 1 页</b><button class="text-button" id="identityAuditNextButton" type="button">下一页</button></div></footer></article>
+        </dialog>
+
+        <dialog class="identity-drawer identity-member-drawer" id="identityMembershipDrawer">
+          <div class="identity-drawer-head"><div><span>项目授权</span><h3>项目成员与角色</h3><p>同一用户在不同项目中可以拥有不同角色。</p></div><button type="button" data-identity-close="identityMembershipDrawer" aria-label="关闭">×</button></div>
+          <div class="identity-drawer-body"><label class="field"><span>管理项目</span><select id="membershipProjectSelect"></select></label><form class="membership-toolbar" id="membershipForm"><label class="field"><span>选择用户</span><select id="membershipUserSelect" required></select></label><label class="field"><span>项目角色</span><select id="membershipRoleSelect"><option value="viewer">只读成员</option><option value="tester">测试执行者</option><option value="project_admin">项目管理员</option></select></label><button class="button secondary" type="submit">保存成员权限</button></form><div class="identity-member-list"><div class="identity-member-list-head"><strong>已授权成员</strong><span id="identityMemberCount">0 人</span></div><div class="table-wrap"><table><thead><tr><th>成员</th><th>项目角色</th><th>状态</th><th>操作</th></tr></thead><tbody id="identityMembersBody"></tbody></table></div></div></div>
+        </dialog>
       </section>
     </main>
   </div>
   <div id="toastArea" class="toast-area"></div>
-  <script src="/static/app.js?v=20260902.1" defer></script>
+  <script src="/static/app.js?v=20260902.9" defer></script>
 </body>
 </html>

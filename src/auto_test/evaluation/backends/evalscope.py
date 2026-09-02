@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import csv
 import os
 import queue
 import signal
@@ -14,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from auto_test.evaluation.backends.base import emit
+from auto_test.evaluation.advanced import analyze_capacity, correlate_resources
 from auto_test.evaluation.contracts import (
     BackendEvent,
     BackendResult,
@@ -113,9 +115,16 @@ class EvalScopeBackend:
         task_config = dict(request.task_config)
         inline_dataset = task_config.pop("_inline_dataset", None)
         inline_kind = str(task_config.pop("_inline_dataset_kind", "") or "")
+        load_profile = dict(task_config.pop("_load_profile", {}) or {})
         task_config.pop("_safety", None)
         if inline_dataset is not None:
-            dataset_path = request.work_dir / f"{inline_kind or 'dataset'}.jsonl"
+            if inline_kind == "wmt24pp":
+                dataset_root = request.work_dir / "wmt24pp"
+                dataset_root.mkdir(parents=True, exist_ok=True)
+                dataset_path = dataset_root / "test.jsonl"
+            else:
+                dataset_root = None
+                dataset_path = request.work_dir / f"{inline_kind or 'dataset'}.jsonl"
             dataset_path.write_text(
                 "".join(
                     json.dumps(item, ensure_ascii=False) + "\n"
@@ -129,6 +138,8 @@ class EvalScopeBackend:
                 for options in dict(task_config.get("dataset_args") or {}).values():
                     if options.get("dataset_id") == "__LIEMA_INLINE_DATASET__":
                         options["dataset_id"] = str(dataset_path)
+                    if options.get("local_path") == "__LIEMA_INLINE_DATASET__":
+                        options["local_path"] = str(dataset_root or dataset_path.parent)
         request_payload = {
             "schema_version": "1.0",
             "run_id": request.run_id,
@@ -147,6 +158,11 @@ class EvalScopeBackend:
         environment["PYTHONPATH"] = os.pathsep.join(
             item for item in (str(self.runtime.source_root), existing_pythonpath) if item
         )
+        # Windows child processes otherwise inherit the active console code page
+        # (commonly GBK), while this adapter intentionally reads the pipe as UTF-8.
+        # Pin the child stream encoding so EvalScope diagnostics remain readable.
+        environment["PYTHONIOENCODING"] = "utf-8"
+        environment["PYTHONUTF8"] = "1"
         environment.setdefault("HF_HUB_OFFLINE", "1")
         environment.setdefault("TRANSFORMERS_OFFLINE", "1")
         cache_root = self.runtime.cache_root
@@ -231,10 +247,25 @@ class EvalScopeBackend:
         mapped = self.mapper.map_directory(
             request.work_dir, secret_values=request.secret_env.values()
         )
+        summary = dict(mapped.get("summary") or {})
+        if request.mode == "perf":
+            performance = dict(summary.get("performance") or {})
+            summary["load_profile"] = load_profile
+            summary["capacity"] = analyze_capacity(performance.get("stages") or [])
+            resource_path = request.work_dir / "resource_samples.csv"
+            resource_rows: list[dict[str, str]] = []
+            if resource_path.is_file():
+                with resource_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                    resource_rows = list(csv.DictReader(handle))
+            summary["resource_correlation"] = correlate_resources(resource_rows)
+            mapped["summary"] = summary
+            (request.work_dir / "summary.json").write_text(
+                json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
         emit(on_event, "completed", "EvalScope 子进程执行完成", phase="completed", progress=100)
         return BackendResult(
             status="completed",
-            summary=dict(mapped.get("summary") or {}),
+            summary=summary,
             artifacts={"work_dir": str(request.work_dir), "runner_output": str(output_path)},
             raw=mapped,
         )
