@@ -708,6 +708,10 @@ PUBLIC_PATHS = {
 
 
 def _required_permission(method: str, path: str) -> str:
+    if method in {"GET", "HEAD", "OPTIONS"} and path.startswith(
+        "/api/model-evaluation/"
+    ):
+        return "evaluation:view"
     if method in {"GET", "HEAD", "OPTIONS"}:
         return "project:view"
     if re.fullmatch(r"/api/runs/[^/]+/reports", path):

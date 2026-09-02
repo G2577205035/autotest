@@ -24,6 +24,7 @@ from auto_test.common.config_loader import (
     ai_checks_cfg,
     default_translate_name,
     export_cfg,
+    model_evaluation_cfg,
     monitor_cfg,
     stress_cfg,
     task_queue_cfg,
@@ -45,6 +46,20 @@ from auto_test.reporting.interface_scenario import generate_interface_scenario_r
 from auto_test.reporting.manager import ReportManager
 from auto_test.core.task_queue import TaskSignalQueue
 from auto_test.core.interface_scenario_manager import InterfaceScenarioManager
+from auto_test.evaluation.catalog import (
+    ensure_builtin_evaluation_suites,
+    latest_suite_for_run_kind,
+)
+from auto_test.evaluation.manager import (
+    ModelEvaluationManager,
+    create_model_evaluation_backend_resolver,
+)
+from auto_test.evaluation.presets import (
+    PLAN_CONFIGS,
+    RUN_KINDS,
+    build_task_configuration,
+    public_preset_catalog,
+)
 
 
 BASE_DIR = PROJECT_ROOT
@@ -293,6 +308,15 @@ class ModelProfileInput(BaseModel):
     is_active: bool = False
 
 
+class ModelEvaluationRunInput(BaseModel):
+    run_kind: str = Field(default="mock", max_length=40)
+    plan: str = Field(default="quick", max_length=40)
+    model_profile_id: str = Field(default="", max_length=64)
+    stream: bool = False
+    max_tokens: int = Field(default=256, ge=8, le=8192)
+    timeout_seconds: float = Field(default=60, ge=1, le=600)
+
+
 class ReportTemplateInput(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     sections: list[dict[str, Any]]
@@ -525,6 +549,13 @@ def create_platform_api(
         artifact_storage,
         session_manager=server_session_manager,
     )
+    model_evaluation_manager = ModelEvaluationManager(
+        platform_store,
+        artifact_storage,
+        create_model_evaluation_backend_resolver(BASE_DIR),
+        signal_queue=signal_queue,
+    )
+    setattr(report_manager, "model_evaluation_manager", model_evaluation_manager)
     router = APIRouter(prefix="/api")
 
     def identity_context(request: Request) -> dict[str, Any]:
@@ -1340,6 +1371,274 @@ def create_platform_api(
             raise HTTPException(status_code=404, detail="model profile not found") from exc
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @router.get("/model-evaluation/bootstrap")
+    async def model_evaluation_bootstrap(request: Request):
+        project_id = current_project_id(request)
+        suites = await run_in_threadpool(ensure_builtin_evaluation_suites, platform_store)
+        runs = await run_in_threadpool(platform_store.list_model_eval_runs, project_id, 100)
+        profiles = await run_in_threadpool(platform_store.list_model_profiles)
+        evaluation_config = dict(model_evaluation_cfg())
+        runtime_value = str(
+            get_env("EVALSCOPE_PYTHON", evaluation_config.get("evalscope_python") or "") or ""
+        ).strip()
+        return {
+            **public_preset_catalog(),
+            "suites": suites,
+            "runs": runs,
+            "profiles": [public_profile(item) for item in profiles],
+            "runtime": {
+                "evalscope_version": str(evaluation_config.get("evalscope_version") or "1.11.1"),
+                "evalscope_configured": bool(runtime_value),
+                "queue_backend": model_evaluation_manager.signal_queue.backend,
+            },
+        }
+
+    @router.get("/model-evaluation/suites")
+    async def list_model_evaluation_suites(request: Request):
+        project_id = current_project_id(request)
+        await run_in_threadpool(ensure_builtin_evaluation_suites, platform_store)
+        suites = await run_in_threadpool(
+            platform_store.list_model_eval_suites, project_id
+        )
+        for suite in suites:
+            versions = await run_in_threadpool(
+                platform_store.list_model_eval_suite_versions,
+                project_id,
+                suite["id"],
+                20,
+            )
+            suite["latest_version"] = versions[0] if versions else None
+        return {"suites": suites}
+
+    @router.get("/model-evaluation/suites/{suite_id}/versions/{version_id}")
+    async def get_model_evaluation_suite_version(
+        suite_id: str, version_id: str, request: Request
+    ):
+        project_id = current_project_id(request)
+        version = await run_in_threadpool(
+            platform_store.get_model_eval_suite_version, project_id, version_id
+        )
+        if not version or str(version.get("suite_id") or "") != suite_id:
+            raise HTTPException(status_code=404, detail="evaluation suite version not found")
+        cases = await run_in_threadpool(
+            platform_store.list_model_eval_suite_cases, project_id, version_id, 1000
+        )
+        return {"version": version, "cases": cases}
+
+    @router.post("/model-evaluation/runs", status_code=202)
+    async def create_model_evaluation_run(
+        payload: ModelEvaluationRunInput, request: Request
+    ):
+        project_id = current_project_id(request)
+        if payload.run_kind not in RUN_KINDS:
+            raise HTTPException(status_code=400, detail="不支持的模型评测类型")
+        if payload.plan not in PLAN_CONFIGS:
+            raise HTTPException(status_code=400, detail="不支持的模型评测方案")
+        try:
+            suite, version, cases = await run_in_threadpool(
+                latest_suite_for_run_kind,
+                platform_store,
+                project_id,
+                payload.run_kind,
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        profile = None
+        if payload.run_kind != "mock":
+            if not payload.model_profile_id:
+                raise HTTPException(status_code=400, detail="请选择已配置的被测模型")
+            profile = await run_in_threadpool(
+                platform_store.get_model_profile, payload.model_profile_id
+            )
+            if not profile:
+                raise HTTPException(status_code=404, detail="model profile not found")
+            if str(profile.get("provider") or "") != "openai-compatible":
+                raise HTTPException(status_code=409, detail="首版评测只支持 OpenAI Compatible 模型")
+        try:
+            backend, backend_version, mode, task_config = build_task_configuration(
+                run_kind=payload.run_kind,
+                plan=payload.plan,
+                profile=profile,
+                cases=cases,
+                stream=payload.stream,
+                max_tokens=payload.max_tokens,
+                timeout=payload.timeout_seconds,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        model_snapshot = (
+            {
+                "id": str(profile.get("id") or ""),
+                "name": str(profile.get("name") or ""),
+                "provider": str(profile.get("provider") or ""),
+                "base_url": str(profile.get("base_url") or ""),
+                "model_name": str(profile.get("model_name") or ""),
+            }
+            if profile
+            else {"name": "Deterministic Mock", "provider": "mock"}
+        )
+        snapshot = {
+            "schema_version": "1.0",
+            "run_kind": payload.run_kind,
+            "plan": payload.plan,
+            "mode": mode,
+            "model": model_snapshot,
+            "suite": {
+                "id": suite["id"],
+                "name": suite["name"],
+                "version_id": version["id"],
+                "version": version["version"],
+                "content_sha256": version["content_sha256"],
+                "manifest": version.get("manifest") or {},
+                "upstream": version.get("upstream") or {},
+            },
+            "parameters": {
+                "stream": payload.stream,
+                "max_tokens": payload.max_tokens,
+                "timeout_seconds": payload.timeout_seconds,
+            },
+            "task_config": task_config,
+        }
+        context = identity_context(request)
+        run = await run_in_threadpool(
+            model_evaluation_manager.submit,
+            project_id,
+            snapshot=snapshot,
+            model_profile_id=str(payload.model_profile_id or ""),
+            suite_version_id=str(version["id"]),
+            backend=backend,
+            backend_version=backend_version,
+            created_by=str((context.get("user") or {}).get("id") or ""),
+        )
+        return run
+
+    @router.get("/model-evaluation/runs")
+    async def list_model_evaluation_runs(
+        request: Request, limit: int = Query(default=100, ge=1, le=500)
+    ):
+        project_id = current_project_id(request)
+        runs = await run_in_threadpool(
+            platform_store.list_model_eval_runs, project_id, limit
+        )
+        return {"runs": runs}
+
+    @router.get("/model-evaluation/runs/{run_id}")
+    async def get_model_evaluation_run(run_id: str, request: Request):
+        run = await run_in_threadpool(
+            platform_store.get_model_eval_run, current_project_id(request), run_id
+        )
+        if not run:
+            raise HTTPException(status_code=404, detail="evaluation run not found")
+        return run
+
+    @router.get("/model-evaluation/runs/{run_id}/events")
+    async def list_model_evaluation_run_events(
+        run_id: str,
+        request: Request,
+        after_id: int = Query(default=0, ge=0),
+        limit: int = Query(default=1000, ge=1, le=5000),
+    ):
+        project_id = current_project_id(request)
+        run = await run_in_threadpool(platform_store.get_model_eval_run, project_id, run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="evaluation run not found")
+        events = await run_in_threadpool(
+            platform_store.list_model_eval_run_events,
+            project_id,
+            run_id,
+            after_id,
+            limit,
+        )
+        return {"events": events, "last_id": events[-1]["id"] if events else after_id}
+
+    @router.get("/model-evaluation/runs/{run_id}/results")
+    async def list_model_evaluation_results(
+        run_id: str,
+        request: Request,
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=50, ge=1, le=200),
+        status: str = Query(default="", max_length=32),
+    ):
+        project_id = current_project_id(request)
+        run = await run_in_threadpool(platform_store.get_model_eval_run, project_id, run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="evaluation run not found")
+        results, total = await run_in_threadpool(
+            platform_store.list_model_eval_case_results,
+            project_id,
+            run_id,
+            offset=(page - 1) * page_size,
+            limit=page_size,
+            status=status,
+        )
+        return {
+            "results": results,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": max(1, (total + page_size - 1) // page_size),
+        }
+
+    @router.post("/model-evaluation/runs/{run_id}/stop")
+    async def stop_model_evaluation_run(run_id: str, request: Request):
+        run = await run_in_threadpool(
+            model_evaluation_manager.stop_run,
+            current_project_id(request),
+            run_id,
+        )
+        if not run:
+            raise HTTPException(status_code=404, detail="evaluation run not found")
+        return run
+
+    @router.get("/model-evaluation/runs/{run_id}/artifacts/{kind}")
+    async def download_model_evaluation_artifact(
+        run_id: str, kind: str, request: Request
+    ):
+        project_id = current_project_id(request)
+        run = await run_in_threadpool(platform_store.get_model_eval_run, project_id, run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="evaluation run not found")
+        artifact_ref = str(run.get("artifact_ref") or "")
+        if not artifact_ref:
+            raise HTTPException(status_code=409, detail="评测产物尚未生成")
+        names = {
+            "summary": ("summary.json",),
+            "responses": ("responses.jsonl",),
+            "performance": ("performance_samples.csv",),
+        }.get(kind)
+        if not names:
+            raise HTTPException(status_code=400, detail="不支持的评测产物类型")
+        try:
+            root = await run_in_threadpool(artifact_storage.materialize_tree, artifact_ref)
+            path = next(
+                (
+                    candidate
+                    for name in names
+                    for candidate in sorted(root.rglob(name))
+                    if candidate.is_file()
+                ),
+                None,
+            )
+            if path is None and kind == "responses":
+                path = next(
+                    (
+                        candidate
+                        for candidate in sorted(root.rglob("*.jsonl"))
+                        if "/predictions/" in "/" + candidate.relative_to(root).as_posix()
+                    ),
+                    None,
+                )
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=404, detail="评测产物不存在") from exc
+        if path is None:
+            raise HTTPException(status_code=409, detail="该评测尚未生成此类产物")
+        media_type = {
+            "summary": "application/json",
+            "responses": "application/x-ndjson",
+            "performance": "text/csv",
+        }[kind]
+        return FileResponse(str(path), media_type=media_type, filename=path.name)
 
     @router.get("/report-template")
     async def get_report_template():

@@ -37,6 +37,8 @@ class ModelEvaluationContractTests(unittest.TestCase):
                 "model": {"api_key_env": "LIEMA_EVAL_MODEL_API_KEY"},
                 "token_source": "api_usage",
                 "max_tokens": 128,
+                "input_tokens_average": 32.5,
+                "output_tokens_average": 12.0,
             }
         )
 

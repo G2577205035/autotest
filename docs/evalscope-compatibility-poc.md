@@ -1,6 +1,6 @@
 # EvalScope 1.11.1 隔离兼容性 PoC
 
-> 验证日期：2026-09-01  
+> 验证日期：2026-09-01；参数/结果映射复验：2026-09-02
 > 结论：通过，可作为烈马模型评测第一版的锁定候选；生产镜像仍需在工作日 4 完成离线依赖清单、许可证和哈希收口。
 
 ## 1. 固定环境
@@ -38,7 +38,7 @@ python -m pip install "evalscope[perf]==1.11.1"
 ..\.venv\Scripts\python.exe scripts\model_evaluation_poc.py
 ```
 
-本次最终运行输出位于 `runtime/model-evaluation-poc/20260901-162222/`（运行目录不提交）。标准评测映射到 11 个文件，性能压测映射到 11 个文件，两个入口均返回 `completed`。
+本次最终复验输出位于 `runtime/model-evaluation-poc/20260902-102441/`（运行目录不提交）。标准评测与性能压测两个入口均返回 `completed`，性能结果已归一化为阶梯、吞吐和百分位指标。
 
 ## 3. 已确认的兼容处理
 
@@ -48,6 +48,7 @@ python -m pip install "evalscope[perf]==1.11.1"
 4. `general_qa` 的 BLEU 还依赖 NLTK `punkt_tab`。PoC 在缺少该资源时确认 EvalScope 会记录指标错误并继续输出 Rouge；正式离线包必须预取该资源。
 5. WMT 的 BERTScore/COMET 需要额外模型和 `unbabel-comet`。工作日 1 仅用 BLEU 验证 WMT 数据、调用、评分和报告链；完整翻译指标按工作日 3 的许可、哈希和离线模型流程接入。
 6. EvalScope 冷启动明显重于现有 Worker（本机首次导入约一分钟），因此继续坚持隔离子进程；若正式并发或内存验收不满足，再无损切换为独立 Evaluation Worker 镜像。
+7. EvalScope 性能汇总包含 `input_tokens_average`、`output_tokens_average` 等统计字段；平台安全守卫只对这些明确统计键放行，仍拒绝 API Key、访问 Token、密码及带敏感查询参数的 URL。
 
 ## 4. 复验规则
 

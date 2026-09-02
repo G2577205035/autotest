@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <title>烈马自动化测试平台</title>
   <link rel="icon" type="image/png" href="/static/assets/liema-favicon.png">
-  <link rel="stylesheet" href="/static/styles.css?v=20260824.1">
+  <link rel="stylesheet" href="/static/styles.css?v=20260902.1">
 </head>
 <body>
   <div class="auth-overlay" id="authOverlay" data-mode="login">
@@ -68,6 +68,7 @@
         <button class="nav-item" data-view="stress"><span><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="5" rx="1"/><rect x="4" y="14" width="16" height="5" rx="1"/><path d="M8 8h.01M8 17h.01M12 8h5M12 17h5"/></svg></span>服务器性能</button>
         <div class="nav-section-label">平台能力</div>
         <button class="nav-item" data-view="reports"><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l3 3v15H6zM15 3v4h4M9 12h6M9 16h6"/></svg></span>报告中心</button>
+        <button class="nav-item" data-view="evaluation"><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8M8 12h3M8 16h5"/><path d="m14 14 1.5 1.5L18 13"/></svg></span>模型评测</button>
         <button class="nav-item" data-view="models"><span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1A7 7 0 0 0 15 6l-.3-2.6h-4L10.4 6a7 7 0 0 0-1.5.9l-2.4-1-2 3.4 2 1.5a7 7 0 0 0 0 2.2l-2 1.5 2 3.4 2.4-1A7 7 0 0 0 10.4 18l.3 2.6h4L15 18a7 7 0 0 0 1.5-.9l2.4 1 2-3.4-2-1.5a7 7 0 0 0 .1-1.2Z"/></svg></span>模型配置</button>
         <button class="nav-item" data-view="interfaces"><span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M8 6h8M7 8l4 8M17 8l-4 8"/></svg></span>接口中心</button>
         <button class="nav-item hidden" id="identityNavItem" data-view="identity"><span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 11h5M18.5 8.5v5"/></svg></span>用户与项目</button>
@@ -362,6 +363,46 @@
         <article class="panel hidden" data-workspace-panel="reports" data-workspace-name="jobs"><div class="panel-head"><div><p class="eyebrow">ARTIFACTS</p><h3>报告任务与产物</h3></div><button class="text-button" id="refreshReportsButton">刷新</button></div><div class="table-wrap"><table><thead><tr><th>任务</th><th>来源运行</th><th>模板</th><th>状态</th><th>尝试</th><th>产物</th></tr></thead><tbody id="reportJobsBody"></tbody></table></div></article>
       </section>
 
+      <section class="view" id="view-evaluation">
+        <div class="evaluation-overview-strip">
+          <div><span>执行引擎</span><strong id="evaluationRuntimeState">正在读取</strong></div>
+          <div><span>内置测试集</span><strong id="evaluationSuiteCount">0 个</strong></div>
+          <div><span>当前项目运行</span><strong id="evaluationRunCount">0 次</strong></div>
+          <p id="evaluationRuntimeHint">EvalScope 在独立 Python 3.11 子进程运行；平台 Web 不加载其依赖。</p>
+        </div>
+        <div class="evaluation-layout">
+          <form class="panel evaluation-launch-panel" id="evaluationForm">
+            <div class="panel-head"><div><p class="eyebrow">NEW EVALUATION</p><h3>新建模型评测</h3></div><span class="step-chip">项目隔离</span></div>
+            <label class="field"><span>评测类型</span><select id="evaluationRunKind"><option value="mock">Mock 流程验证</option><option value="foundation">基础能力与鲁棒性</option><option value="standard_benchmark">标准 Benchmark</option><option value="concurrency">并发阶梯</option></select><small id="evaluationRunKindHint">不调用真实模型，用于验证排队、监控、停止和结果链路。</small></label>
+            <label class="field"><span>被测模型</span><select id="evaluationModelProfile"><option value="">Mock 不需要选择模型</option></select><small>模型地址只能来自“模型配置”，页面不会读取或回显 API Key。</small></label>
+            <div class="form-grid two"><label class="field"><span>运行方案</span><select id="evaluationPlan"><option value="quick">快速体检</option><option value="standard">标准评测</option></select></label><label class="field"><span>最大输出 Tokens</span><input id="evaluationMaxTokens" type="number" min="8" max="8192" value="256"></label></div>
+            <div class="form-grid two"><label class="field"><span>单请求超时（秒）</span><input id="evaluationTimeout" type="number" min="1" max="600" value="60"></label><label class="switch-row evaluation-stream-switch"><input id="evaluationStream" type="checkbox"><span><b>使用流式调用</b><small>首个非空正文分片用于 TTFT。</small></span></label></div>
+            <div class="evaluation-submit-note"><i></i><span id="evaluationSubmitNote">Mock 运行不产生真实模型负载。</span></div>
+            <button class="button primary wide" id="evaluationSubmitButton" type="submit">提交评测任务</button>
+            <p class="form-error" id="evaluationFormError" role="alert"></p>
+          </form>
+          <article class="panel evaluation-runs-panel">
+            <div class="panel-head"><div><p class="eyebrow">RECENT RUNS</p><h3>评测运行</h3></div><button class="text-button" id="refreshEvaluationButton" type="button">刷新</button></div>
+            <div class="table-wrap"><table><thead><tr><th>类型 / 模型</th><th>方案</th><th>阶段</th><th>进度</th><th>提交时间</th><th>操作</th></tr></thead><tbody id="evaluationRunsBody"></tbody></table></div>
+          </article>
+        </div>
+        <article class="panel evaluation-detail-panel" id="evaluationDetailPanel">
+          <div class="panel-head evaluation-detail-head"><div><p class="eyebrow">RUN MONITOR</p><h3 id="evaluationDetailTitle">选择一条评测查看运行监控</h3><p id="evaluationDetailMessage">提交后可在这里查看 Token 来源、吞吐、P95/P99、错误分类与用例明细。</p></div><div class="evaluation-detail-actions"><button class="text-button hidden" id="stopEvaluationButton" type="button">安全停止</button><button class="text-button" id="downloadEvaluationSummaryButton" type="button">JSON 摘要</button><button class="text-button" id="downloadEvaluationPerformanceButton" type="button">CSV 性能</button></div></div>
+          <div class="evaluation-progress"><div><span id="evaluationPhaseLabel">尚未选择运行</span><b id="evaluationProgressLabel">0%</b></div><div class="progress-track"><i id="evaluationProgressBar"></i></div></div>
+          <div class="evaluation-metric-grid">
+            <div><span>成功率</span><strong id="evaluationSuccessRate">—</strong><small id="evaluationQualityScore">质量分 —</small></div>
+            <div><span>Token 来源</span><strong id="evaluationTokenSource">—</strong><small id="evaluationTokenCount">总量 —</small></div>
+            <div><span>P95 / P99</span><strong id="evaluationLatency">—</strong><small>端到端时延</small></div>
+            <div><span>输出吞吐</span><strong id="evaluationThroughput">—</strong><small>Token / 秒</small></div>
+            <div><span>鲁棒保持值</span><strong id="evaluationRobustness">—</strong><small>平均 / 最差</small></div>
+          </div>
+          <div class="evaluation-detail-grid">
+            <section class="evaluation-events"><header><h4>阶段事件</h4><span id="evaluationEventCount">0 条</span></header><div id="evaluationEventsList" class="evaluation-events-list"><p class="muted">尚未选择运行。</p></div></section>
+            <section class="evaluation-results"><header><h4>结果明细</h4><span id="evaluationResultCount">0 条</span></header><div class="table-wrap"><table><thead><tr><th>用例</th><th>状态</th><th>Token</th><th>TTFT</th><th>时延</th><th>规则分</th></tr></thead><tbody id="evaluationResultsBody"></tbody></table></div></section>
+          </div>
+        </article>
+      </section>
+
       <section class="view" id="view-models">
         <div class="page-grid form-layout">
           <form class="panel" id="modelForm"><div class="panel-head"><div><p class="eyebrow">MODEL REGISTRY</p><h3>模型配置</h3></div><span class="secure-badge">密文存储</span></div><input type="hidden" id="modelId"><div class="form-grid two"><label class="field"><span>配置名称</span><input id="modelName" placeholder="生产报告模型" required></label><label class="field"><span>供应商协议</span><select id="modelProvider"><option value="openai-compatible">OpenAI Compatible</option></select></label></div><label class="field"><span>Base URL</span><input id="modelBaseUrl" type="url" placeholder="https://api.example.com/v1" required></label><div class="form-grid two"><label class="field"><span>模型名称</span><input id="modelModelName" placeholder="deepseek-chat" required></label><label class="field"><span>API Key</span><input id="modelApiKey" type="password" autocomplete="new-password" placeholder="更新时留空代表保持原 Key"></label></div><div class="form-grid two"><label class="field"><span>Temperature</span><input id="modelTemperature" type="number" min="0" max="2" step="0.1" value="0.3"></label><label class="field"><span>最大 Tokens</span><input id="modelMaxTokens" type="number" min="64" max="128000" value="2000"></label></div><label class="field"><span>系统提示词</span><textarea id="modelPrompt" rows="4" placeholder="你是企业软件测试报告助手。"></textarea></label><label class="switch-row"><input id="modelActive" type="checkbox" checked><span><b>保存后设为启用模型</b><small>同一时间只会有一个启用中的模型。</small></span></label><button class="button primary wide" type="submit">保存模型配置</button><p class="form-error" id="modelFormError"></p></form>
@@ -573,6 +614,6 @@
     </main>
   </div>
   <div id="toastArea" class="toast-area"></div>
-  <script src="/static/app.js?v=20260824.1" defer></script>
+  <script src="/static/app.js?v=20260902.1" defer></script>
 </body>
 </html>

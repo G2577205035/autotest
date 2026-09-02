@@ -110,13 +110,32 @@ class EvalScopeBackend:
         request.work_dir.mkdir(parents=True, exist_ok=True)
         request_path = request.work_dir / "evalscope_request.json"
         output_path = request.work_dir / "evalscope_runner_output.json"
+        task_config = dict(request.task_config)
+        inline_dataset = task_config.pop("_inline_dataset", None)
+        inline_kind = str(task_config.pop("_inline_dataset_kind", "") or "")
+        task_config.pop("_safety", None)
+        if inline_dataset is not None:
+            dataset_path = request.work_dir / f"{inline_kind or 'dataset'}.jsonl"
+            dataset_path.write_text(
+                "".join(
+                    json.dumps(item, ensure_ascii=False) + "\n"
+                    for item in list(inline_dataset)
+                ),
+                encoding="utf-8",
+            )
+            if request.mode == "perf":
+                task_config["dataset_path"] = str(dataset_path)
+            else:
+                for options in dict(task_config.get("dataset_args") or {}).values():
+                    if options.get("dataset_id") == "__LIEMA_INLINE_DATASET__":
+                        options["dataset_id"] = str(dataset_path)
         request_payload = {
             "schema_version": "1.0",
             "run_id": request.run_id,
             "mode": request.mode,
             "backend_version": request.backend_version or self.version,
             "work_dir": str(request.work_dir),
-            "task_config": request.task_config,
+            "task_config": task_config,
             "secret_env_names": sorted(request.secret_env),
         }
         request_path.write_text(

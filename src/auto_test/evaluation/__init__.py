@@ -6,10 +6,13 @@ from auto_test.evaluation.contracts import (
     EvaluationBackend,
     EvaluationRequest,
 )
+from auto_test.evaluation.model_client import EvaluationModelClient, ObservedModelResponse
 
 __all__ = [
     "BackendEvent",
     "BackendResult",
     "EvaluationBackend",
     "EvaluationRequest",
+    "EvaluationModelClient",
+    "ObservedModelResponse",
 ]

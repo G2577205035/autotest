@@ -50,12 +50,14 @@ async def lifespan(_app: FastAPI):
         manager.start()
         report_manager.start()
         interface_scenario_manager.start()
+        model_evaluation_manager.start()
     stress_manager.start()
     try:
         yield
     finally:
         stress_manager.stop()
         if execution_mode == "embedded":
+            model_evaluation_manager.stop()
             interface_scenario_manager.stop()
             report_manager.stop()
             manager.stop()
@@ -119,6 +121,7 @@ platform_api, report_manager, platform_store, stress_manager = create_platform_a
     signal_queue=task_signal_queue,
 )
 interface_scenario_manager = report_manager.interface_scenario_manager
+model_evaluation_manager = report_manager.model_evaluation_manager
 identity_api, identity_service = create_identity_api(platform_store)
 install_identity_guard(app, identity_service)
 

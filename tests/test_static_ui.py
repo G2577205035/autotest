@@ -142,6 +142,29 @@ class StaticWorkspaceTests(unittest.TestCase):
             self.javascript,
         )
 
+    def test_model_evaluation_workspace_exposes_submit_monitor_stop_and_results(self):
+        for element_id in (
+            "view-evaluation",
+            "evaluationForm",
+            "evaluationRunKind",
+            "evaluationModelProfile",
+            "evaluationRunsBody",
+            "evaluationProgressBar",
+            "evaluationEventsList",
+            "evaluationResultsBody",
+            "stopEvaluationButton",
+        ):
+            self.assertIn(f'id="{element_id}"', self.html)
+        self.assertIn('data-view="evaluation"', self.html)
+        self.assertIn('async function loadEvaluationWorkspace(reset)', self.javascript)
+        self.assertIn('api("/api/model-evaluation/bootstrap")', self.javascript)
+        self.assertIn('api("/api/model-evaluation/runs",{method:"POST"', self.javascript)
+        self.assertIn('function refreshSelectedEvaluationRun()', self.javascript)
+        self.assertIn('downloadEvaluationArtifact("performance")', self.javascript)
+        self.assertIn('hasPermission("evaluation:operate")', self.javascript)
+        self.assertIn('.evaluation-metric-grid{display:grid;grid-template-columns:repeat(5', self.stylesheet)
+        self.assertIn('.evaluation-detail-grid{display:grid;grid-template-columns:', self.stylesheet)
+
     def test_business_project_switchers_hide_internal_project_keys(self):
         self.assertIn('function businessProjectLabel(project)', self.javascript)
         self.assertIn('esc(businessProjectLabel(project))+"</option>"', self.javascript)
@@ -239,8 +262,8 @@ class StaticWorkspaceTests(unittest.TestCase):
         self.assertNotIn('key === "cpu_temp_c" || key === "gpu_temp_c"', self.javascript)
 
     def test_desktop_typography_has_readable_1080p_baseline_and_cache_version(self):
-        self.assertIn('styles.css?v=20260824.1', self.html)
-        self.assertIn('app.js?v=20260824.1', self.html)
+        self.assertIn('styles.css?v=20260902.1', self.html)
+        self.assertIn('app.js?v=20260902.1', self.html)
         self.assertIn('@media(min-width:981px)', self.stylesheet)
         self.assertIn('body{font-size:16px;line-height:1.6}', self.stylesheet)
         self.assertIn('table{font-size:15px}', self.stylesheet)

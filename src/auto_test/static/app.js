@@ -10,22 +10,24 @@ const state = {
   stressCapability: null, selectedGpuDevices: [], stressPreset: "quick", stressResourcesAutoOpened: false, expandedGpuIndex: null, gpuRenderContext: null,
   serverProfiles: [], serverSessions: [], serverSessionId: "", closingServerSessionId: "", serverSessionMetricCursor: {}, serverSessionMetrics: {},
   stressReportJobId: "", dashboardRunsSignature: "",
+  evaluationBootstrap: null, evaluationRuns: [], selectedEvaluationRunId: "", evaluationEvents: [], evaluationResults: [],
   pollTimer: null
 };
-const titles = {dashboard:"运行总览","new-run":"发起测试",monitor:"实时监控",stress:"服务器性能",reports:"报告中心",models:"模型配置",interfaces:"接口中心",identity:"用户、项目与权限"};
+const titles = {dashboard:"运行总览","new-run":"发起测试",monitor:"实时监控",stress:"服务器性能",reports:"报告中心",evaluation:"模型评测",models:"模型配置",interfaces:"接口中心",identity:"用户、项目与权限"};
 const subtitles = {
   dashboard:"任务状态、质量指标与最近运行",
   "new-run":"创建业务自动化测试任务",
   monitor:"查看阶段进度、资源曲线与实时日志",
   stress:"服务器会话、实时状态、压测与性能报告",
   reports:"生成、管理与下载企业测试报告",
+  evaluation:"标准能力、Token、鲁棒性与推理并发评测",
   models:"安全维护报告生成模型",
   interfaces:"按项目管理接口、模块、环境、变量与不可变版本",
   identity:"管理业务项目、平台用户、项目成员角色与安全审计"
 };
 const stages = ["queued","preparing","stress","authentication","upload","parsing","translation","verification","ai_checks","export","reporting","completed"];
 const stageNames = {queued:"排队",preparing:"准备",stress:"压力测试",authentication:"登录",upload:"上传",parsing:"解析",translation:"翻译",verification:"校验",ai_checks:"AI检查",export:"导出",reporting:"报告",completed:"完成",failed:"失败",interrupted:"中断"};
-const statusNames = {authorized:"已授权待执行",queued:"排队中",running:"运行中",succeeded:"已成功",failed:"失败",interrupted:"已中断",retrying:"重试中",draft:"草稿",published:"已发布",archived:"已归档"};
+const statusNames = {authorized:"已授权待执行",queued:"排队中",preparing:"准备中",running:"运行中",scoring:"评分中",reporting:"报告中",completed:"已完成",stopped:"已停止",passed:"通过",error:"错误",succeeded:"已成功",failed:"失败",interrupted:"已中断",retrying:"重试中",draft:"草稿",published:"已发布",archived:"已归档"};
 const stressPresetNames = {health:"在线体检",quick:"快速验证",standard:"标准测试",stability:"稳定性测试",custom:"自定义"};
 const stressModeNames = {monitor:"监控",cpu:"CPU",gpu:"GPU"};
 
@@ -200,6 +202,7 @@ function gotoView(name) {
   if (name === "new-run") loadServerWorkspace(false);
   if (name === "stress") loadServerWorkspace();
   if (name === "reports") Promise.allSettled([loadReports(),loadTemplate()]);
+  if (name === "evaluation") loadEvaluationWorkspace(true);
   if (name === "models") loadModels();
   if (name === "interfaces") loadInterfaces();
   if (name === "identity") loadIdentityData();
@@ -264,6 +267,7 @@ function syncIdentityChrome() {
   ["projectSwitcher","interfaceProjectSwitcher"].forEach(function(id){const node=$("#"+id);if(!node)return;node.innerHTML=projectOptions;node.value=state.projectId;node.disabled=projects.length<2;});
   $("#identityNavItem").classList.toggle("hidden",!user.is_superuser);
   $$('[data-view="models"]').forEach(function(node){node.classList.toggle("hidden",!hasPermission("platform:manage"));});
+  $$('[data-view="evaluation"]').forEach(function(node){node.classList.toggle("hidden",!hasPermission("evaluation:view"));});
   $$('[data-view="new-run"],[data-goto="new-run"]').forEach(function(node){node.classList.toggle("permission-hidden",!hasPermission("test:execute"));});
   syncInterfacePermissions();
 }
@@ -314,7 +318,7 @@ async function switchProject(projectId,returnView) {
   state.projectId=projectId;
   try {
     const identity=await api("/api/auth/status");
-    state.bootstrap=null;state.runs=[];state.reports=[];state.stressJobs=[];state.serverProfiles=[];state.serverSessions=[];state.serverSessionId="";state.selectedRunId="";state.monitorRunId="";state.stressJobId="";state.stressReportJobId="";state.dashboardRunsSignature="";state.logCursor={};state.metricCursor={};state.stressMetricCursor={};state.logs={};state.metrics={};state.stressMetrics={};state.interfaces=[];state.interfaceModules=[];state.interfaceEnvironments=[];state.interfaceVariables=[];state.interfaceScenarios=[];state.interfaceScenarioRuns=[];state.selectedInterfaceScenarioIds=[];state.selectedInterfaceModuleId="";
+    state.bootstrap=null;state.runs=[];state.reports=[];state.stressJobs=[];state.serverProfiles=[];state.serverSessions=[];state.serverSessionId="";state.selectedRunId="";state.monitorRunId="";state.stressJobId="";state.stressReportJobId="";state.dashboardRunsSignature="";state.logCursor={};state.metricCursor={};state.stressMetricCursor={};state.logs={};state.metrics={};state.stressMetrics={};state.interfaces=[];state.interfaceModules=[];state.interfaceEnvironments=[];state.interfaceVariables=[];state.interfaceScenarios=[];state.interfaceScenarioRuns=[];state.selectedInterfaceScenarioIds=[];state.selectedInterfaceModuleId="";state.evaluationBootstrap=null;state.evaluationRuns=[];state.selectedEvaluationRunId="";state.evaluationEvents=[];state.evaluationResults=[];
     await completeAuthentication(identity);
     gotoView(returnView || "dashboard");
     toast("已切换到项目："+(identity.current_project || {}).name);
@@ -456,6 +460,7 @@ async function refreshAll() {
   const jobs=[loadRuns(),loadReports()];
   if($("#view-new-run").classList.contains("active"))jobs.push(loadServerWorkspace(false));
   if($("#view-models").classList.contains("active"))jobs.push(loadModels());
+  if($("#view-evaluation").classList.contains("active"))jobs.push(loadEvaluationWorkspace(false));
   if($("#view-interfaces").classList.contains("active"))jobs.push(loadInterfaces());
   if($("#view-reports").classList.contains("active"))jobs.push(loadTemplate());
   if($("#view-stress").classList.contains("active")){jobs.push(loadStressJobs());jobs.push(loadServerWorkspace());}
@@ -1963,6 +1968,79 @@ async function downloadReport(jobId, format) {
     link.href=url; link.download="xiaoyi_enterprise_test_report."+format; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
   } catch (error) { toast("下载失败：" + error.message,true); }
 }
+const evaluationKindLabels={mock:"Mock 流程验证",foundation:"基础能力与鲁棒性",standard_benchmark:"标准 Benchmark",concurrency:"并发阶梯"};
+const evaluationPhaseLabels={queued:"排队",preparing:"准备",running:"执行",scoring:"规则评分",reporting:"报告",completed:"完成",failed:"失败",stopped:"已停止",stop_requested:"安全停止中"};
+function evaluationActive(run){return Boolean(run&&["queued","preparing","running","scoring","reporting","stop_requested"].includes(run.status));}
+function evaluationSnapshot(run){return run&&run.snapshot&&typeof run.snapshot==="object"?run.snapshot:{};}
+function evaluationNumber(value,digits){const number=Number(value);return Number.isFinite(number)?number.toFixed(digits==null?1:digits):"—";}
+function evaluationKindInfo(kind){
+  const catalog=(state.evaluationBootstrap&&state.evaluationBootstrap.run_kinds)||[];
+  return catalog.find(function(item){return item.id===kind;})||{id:kind,label:evaluationKindLabels[kind]||kind,description:""};
+}
+function syncEvaluationForm(){
+  const kind=$("#evaluationRunKind").value;
+  const info=evaluationKindInfo(kind);
+  const mock=kind==="mock";
+  const requiresEvalScope=["standard_benchmark","concurrency"].includes(kind);
+  const runtime=(state.evaluationBootstrap&&state.evaluationBootstrap.runtime)||{};
+  $("#evaluationRunKindHint").textContent=info.description||"选择评测范围。";
+  $("#evaluationModelProfile").disabled=mock;
+  if(mock) $("#evaluationModelProfile").value="";
+  $("#evaluationSubmitNote").textContent=mock?"Mock 运行不产生真实模型负载。":requiresEvalScope?(runtime.evalscope_configured?"将使用锁定的 EvalScope "+runtime.evalscope_version+" 隔离运行；并发仅来自当前方案。":"尚未配置 EvalScope Python 3.11 运行时，标准/并发评测暂不可提交。"):("基础能力逐条低并发调用；最大输出 "+$("#evaluationMaxTokens").value+" Tokens。估算 Token 会明确标记，不作为精确验收值。");
+  const canOperate=hasPermission("evaluation:operate");
+  $("#evaluationSubmitButton").disabled=!canOperate||(requiresEvalScope&&!runtime.evalscope_configured);
+  if(!canOperate) $("#evaluationSubmitNote").textContent="当前项目角色可以查看评测结果，但不能发起或停止评测。";
+}
+function populateEvaluationModels(){
+  const models=(state.evaluationBootstrap&&state.evaluationBootstrap.profiles)||[];
+  const current=$("#evaluationModelProfile").value;
+  $("#evaluationModelProfile").innerHTML='<option value="">请选择模型配置</option>'+models.map(function(model){return '<option value="'+esc(model.id)+'">'+esc(model.name+" · "+model.model_name)+(model.has_api_key?"":" · 无鉴权")+'</option>';}).join("");
+  if(models.some(function(model){return model.id===current;})) $("#evaluationModelProfile").value=current;
+  else {const active=models.find(function(model){return model.is_active;});if(active)$("#evaluationModelProfile").value=active.id;}
+}
+function renderEvaluationRuns(){
+  $("#evaluationSuiteCount").textContent=String(((state.evaluationBootstrap||{}).suites||[]).length)+" 个";
+  $("#evaluationRunCount").textContent=String(state.evaluationRuns.length)+" 次";
+  const runtime=(state.evaluationBootstrap&&state.evaluationBootstrap.runtime)||{};
+  $("#evaluationRuntimeState").textContent=runtime.evalscope_configured?("EvalScope "+runtime.evalscope_version):"Mock / 原生可用";
+  $("#evaluationRuntimeHint").textContent=runtime.evalscope_configured?("EvalScope 已配置为隔离子进程，队列后端为 "+(runtime.queue_backend||"local")+"。"):("EvalScope 尚未配置；Mock 与原生基础评测可用，标准 Benchmark 和并发阶梯保持禁用。队列后端为 "+(runtime.queue_backend||"local")+"。");
+  $("#evaluationRunsBody").innerHTML=state.evaluationRuns.map(function(run){
+    const snapshot=evaluationSnapshot(run);const model=snapshot.model||{};const selected=run.id===state.selectedEvaluationRunId;
+    return '<tr'+(selected?' class="selected"':"")+'><td><div class="evaluation-run-name"><strong>'+esc(evaluationKindLabels[snapshot.run_kind]||snapshot.run_kind||run.backend)+'</strong><small>'+esc(model.name||model.model_name||"未记录模型")+'</small></div></td><td>'+esc(snapshot.plan==="standard"?"标准评测":"快速体检")+'</td><td>'+statusPill(run.status)+'</td><td><div class="evaluation-run-progress"><i><b style="width:'+Math.max(0,Math.min(Number(run.progress)||0,100))+'%"></b></i><span>'+esc(run.progress||0)+'%</span></div></td><td>'+esc(fmtTime(run.created_at))+'</td><td><button class="text-button" type="button" data-evaluation-open="'+esc(run.id)+'">查看</button>'+(evaluationActive(run)&&hasPermission("evaluation:operate")?'<button class="text-button danger" type="button" data-evaluation-stop="'+esc(run.id)+'">停止</button>':"")+'</td></tr>';
+  }).join("")||'<tr><td class="evaluation-empty-row" colspan="6">当前项目还没有模型评测运行。</td></tr>';
+}
+function renderEvaluationDetail(run,events,results,total){
+  if(!run){$("#evaluationDetailTitle").textContent="选择一条评测查看运行监控";$("#evaluationDetailMessage").textContent="提交后可在这里查看 Token 来源、吞吐、P95/P99、错误分类与用例明细。";return;}
+  const snapshot=evaluationSnapshot(run);const summary=run.summary||{};const performance=summary.performance||{};const token=summary.token_usage||{};const robustness=summary.robustness||{};
+  $("#evaluationDetailTitle").textContent=(evaluationKindLabels[snapshot.run_kind]||snapshot.run_kind||"模型评测")+" · "+shortId(run.id);
+  $("#evaluationDetailMessage").textContent=run.message||run.error||"评测运行已创建";
+  $("#evaluationPhaseLabel").textContent=evaluationPhaseLabels[run.phase]||evaluationPhaseLabels[run.status]||run.phase||run.status;
+  $("#evaluationProgressLabel").textContent=String(run.progress||0)+"%";$("#evaluationProgressBar").style.width=Math.max(0,Math.min(Number(run.progress)||0,100))+"%";
+  $("#stopEvaluationButton").classList.toggle("hidden",!evaluationActive(run)||!hasPermission("evaluation:operate"));
+  $("#evaluationSuccessRate").textContent=summary.success_rate==null?"—":evaluationNumber(summary.success_rate,1)+"%";
+  $("#evaluationQualityScore").textContent="质量分 "+(summary.quality_score==null?"—":evaluationNumber(summary.quality_score,1));
+  const sources=Object.keys(token.source_counts||{});const sourceLabels={api_usage:"API 精确",local_tokenizer:"本地 Tokenizer",estimated:"估算"};
+  $("#evaluationTokenSource").textContent=sources.length?sources.map(function(item){return sourceLabels[item]||item;}).join(" / "):"—";
+  $("#evaluationTokenCount").textContent="总量 "+(token.total_tokens==null?"—":token.total_tokens);
+  $("#evaluationLatency").textContent=(performance.latency_p95_ms==null?"—":evaluationNumber(performance.latency_p95_ms,1))+" / "+(performance.latency_p99_ms==null?"—":evaluationNumber(performance.latency_p99_ms,1))+" ms";
+  $("#evaluationThroughput").textContent=performance.output_tokens_per_second==null?"—":evaluationNumber(performance.output_tokens_per_second,2);
+  $("#evaluationRobustness").textContent=robustness.average_retention==null?"—":evaluationNumber(robustness.average_retention,1)+"% / "+evaluationNumber(robustness.worst_retention,1)+"%";
+  $("#evaluationEventCount").textContent=events.length+" 条";
+  $("#evaluationEventsList").innerHTML=events.map(function(item){return '<article class="evaluation-event"><i></i><div><strong>'+esc(item.message||item.event_type)+'</strong><small>'+esc(evaluationPhaseLabels[item.phase]||item.phase||"事件")+' · '+esc(fmtTime(item.created_at))+(item.progress==null?"":" · "+esc(item.progress)+"%")+'</small></div></article>';}).join("")||'<p class="muted">暂无阶段事件。</p>';
+  $("#evaluationResultCount").textContent=String(total||0)+" 条";
+  $("#evaluationResultsBody").innerHTML=results.map(function(item){const metrics=item.metrics||{};const score=item.score||{};const totalTokens=metrics.total_tokens==null?((Number(metrics.input_tokens)||0)+(Number(metrics.output_tokens)||0)):metrics.total_tokens;return '<tr><td><code>'+esc(item.case_id||"—")+'</code></td><td>'+statusPill(item.status)+'</td><td>'+esc(totalTokens||"—")+'<small class="table-subline">'+esc(metrics.token_source||"—")+'</small></td><td>'+esc(metrics.ttft_ms==null?"—":evaluationNumber(metrics.ttft_ms,1)+" ms")+'</td><td>'+esc(metrics.latency_ms==null?"—":evaluationNumber(metrics.latency_ms,1)+" ms")+'</td><td><span class="evaluation-result-score">'+esc(score.score==null?"—":evaluationNumber(Number(score.score)*100,1)+"%")+'</span></td></tr>';}).join("")||'<tr><td class="evaluation-empty-row" colspan="6">当前运行尚无用例级明细；性能阶梯请查看顶部汇总与 CSV。</td></tr>';
+}
+async function refreshSelectedEvaluationRun(){
+  const runId=state.selectedEvaluationRunId;if(!runId){renderEvaluationDetail(null,[],[],0);return;}
+  try {const payloads=await Promise.all([api("/api/model-evaluation/runs/"+encodeURIComponent(runId)),api("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/events?limit=1000"),api("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/results?page_size=200")]);const run=payloads[0];state.evaluationEvents=payloads[1].events||[];state.evaluationResults=payloads[2].results||[];const index=state.evaluationRuns.findIndex(function(item){return item.id===run.id;});if(index>=0)state.evaluationRuns[index]=Object.assign({},state.evaluationRuns[index],run);renderEvaluationRuns();renderEvaluationDetail(run,state.evaluationEvents,state.evaluationResults,payloads[2].total||0);}catch(error){toast("评测详情加载失败："+error.message,true);}
+}
+async function loadEvaluationWorkspace(reset){
+  try {if(reset||!state.evaluationBootstrap){state.evaluationBootstrap=await api("/api/model-evaluation/bootstrap");state.evaluationRuns=state.evaluationBootstrap.runs||[];populateEvaluationModels();syncEvaluationForm();}else{const data=await api("/api/model-evaluation/runs?limit=100");state.evaluationRuns=data.runs||[];}if(!state.evaluationRuns.some(function(run){return run.id===state.selectedEvaluationRunId;}))state.selectedEvaluationRunId=(state.evaluationRuns[0]||{}).id||"";renderEvaluationRuns();await refreshSelectedEvaluationRun();}catch(error){toast("模型评测加载失败："+error.message,true);}
+}
+async function submitEvaluation(event){
+  event.preventDefault();$("#evaluationFormError").textContent="";const kind=$("#evaluationRunKind").value;const modelId=$("#evaluationModelProfile").value;if(kind!=="mock"&&!modelId){$("#evaluationFormError").textContent="请选择已配置的被测模型";return;}const button=$("#evaluationSubmitButton");button.disabled=true;button.textContent="正在提交…";try{const run=await api("/api/model-evaluation/runs",{method:"POST",body:{run_kind:kind,plan:$("#evaluationPlan").value,model_profile_id:modelId,stream:$("#evaluationStream").checked,max_tokens:Number($("#evaluationMaxTokens").value),timeout_seconds:Number($("#evaluationTimeout").value)}});state.selectedEvaluationRunId=run.id;toast("模型评测已排队："+shortId(run.id));await loadEvaluationWorkspace(false);}catch(error){$("#evaluationFormError").textContent=error.message;}finally{button.textContent="提交评测任务";syncEvaluationForm();}}
+async function stopEvaluationRun(runId){try{await api("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/stop",{method:"POST"});toast("已请求安全停止模型评测");state.selectedEvaluationRunId=runId;await loadEvaluationWorkspace(false);}catch(error){toast("停止评测失败："+error.message,true);}}
+async function downloadEvaluationArtifact(kind){const runId=state.selectedEvaluationRunId;if(!runId){toast("请先选择评测运行",true);return;}try{const response=await fetch("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/artifacts/"+kind,{headers:{"X-Project-ID":state.projectId}});if(!response.ok){const data=await response.json();throw new Error(data.detail||"下载失败");}const blob=await response.blob();const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download=kind==="performance"?"model_evaluation_performance.csv":"model_evaluation_summary.json";document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);}catch(error){toast("下载评测产物失败："+error.message,true);}}
 async function loadModels() {
   try {
     const data = await api("/api/model-profiles"); state.models = data.profiles || [];
@@ -2485,6 +2563,7 @@ function startPolling() {
         }
       }
       if($("#view-reports").classList.contains("active")) await loadReports();
+      if($("#view-evaluation").classList.contains("active")) await loadEvaluationWorkspace(false);
     }
     catch(error){ console.warn(error); }
   },2500);
@@ -2505,6 +2584,8 @@ function bind() {
     const edit=event.target.closest("[data-model-edit]");if(edit)editModel(edit.dataset.modelEdit);
     const test=event.target.closest("[data-model-test]");if(test)modelAction(test.dataset.modelTest,"test",test);
     const activate=event.target.closest("[data-model-activate]");if(activate)modelAction(activate.dataset.modelActivate,"activate",activate);
+    const evaluationOpen=event.target.closest("[data-evaluation-open]");if(evaluationOpen){state.selectedEvaluationRunId=evaluationOpen.dataset.evaluationOpen;refreshSelectedEvaluationRun();}
+    const evaluationStop=event.target.closest("[data-evaluation-stop]");if(evaluationStop)stopEvaluationRun(evaluationStop.dataset.evaluationStop);
     const stressStop=event.target.closest(".stress-stop");if(stressStop)stopStressJob(stressStop.dataset.id);
     const stressRetry=event.target.closest(".stress-retry");if(stressRetry)retryStressJob(stressRetry.dataset.id);
     const stressDownload=event.target.closest(".stress-download");if(stressDownload)downloadStressReport(stressDownload.dataset.format,stressDownload.dataset.id);
@@ -2597,6 +2678,13 @@ function bind() {
   $("#reportForm").addEventListener("submit",submitReport);
   $("#refreshReportsButton").addEventListener("click",loadReports);
   $("#modelForm").addEventListener("submit",submitModel);
+  $("#evaluationForm").addEventListener("submit",submitEvaluation);
+  $("#evaluationRunKind").addEventListener("change",syncEvaluationForm);
+  $("#evaluationMaxTokens").addEventListener("input",syncEvaluationForm);
+  $("#refreshEvaluationButton").addEventListener("click",function(){loadEvaluationWorkspace(false);});
+  $("#stopEvaluationButton").addEventListener("click",function(){if(state.selectedEvaluationRunId)stopEvaluationRun(state.selectedEvaluationRunId);});
+  $("#downloadEvaluationSummaryButton").addEventListener("click",function(){downloadEvaluationArtifact("summary");});
+  $("#downloadEvaluationPerformanceButton").addEventListener("click",function(){downloadEvaluationArtifact("performance");});
   $("#interfaceForm").addEventListener("submit",submitInterface);
   $("#refreshInterfacesButton").addEventListener("click",loadInterfaces);
   $("#newInterfaceModuleButton").addEventListener("click",function(){openInterfaceModuleEditor("");});

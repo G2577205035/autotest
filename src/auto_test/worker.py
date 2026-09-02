@@ -10,10 +10,6 @@ from auto_test.common.paths import PROJECT_ROOT, prepare_runtime_layout
 from auto_test.common.runtime_secrets import ensure_runtime_master_key
 from auto_test.core.task_manager import TaskManager
 from auto_test.core.task_queue import create_task_signal_queue
-from auto_test.evaluation.manager import (
-    ModelEvaluationManager,
-    create_model_evaluation_backend_resolver,
-)
 from auto_test.platform.artifact_storage import create_artifact_storage
 from auto_test.platform.persistence import create_platform_repository
 from auto_test.platform.api import create_platform_api
@@ -33,12 +29,7 @@ def main() -> None:
         signal_queue=signal_queue,
     )
     interface_scenario_manager = report_manager.interface_scenario_manager
-    model_evaluation_manager = ModelEvaluationManager(
-        platform_store,
-        artifact_storage,
-        create_model_evaluation_backend_resolver(PROJECT_ROOT),
-        signal_queue=signal_queue,
-    )
+    model_evaluation_manager = report_manager.model_evaluation_manager
     stopping = threading.Event()
     heartbeat_stopped = threading.Event()
 

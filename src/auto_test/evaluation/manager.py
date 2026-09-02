@@ -17,10 +17,12 @@ from auto_test.evaluation.backends import (
     DeterministicMockBackend,
     EvalScopeBackend,
     EvalScopeRuntimeConfig,
+    NativeEvaluationBackend,
 )
 from auto_test.evaluation.contracts import BackendEvent, EvaluationBackend, EvaluationRequest
 from auto_test.platform.artifact_storage import ArtifactStorage
 from auto_test.platform.contracts import PlatformRepository
+from auto_test.platform.models import decrypt_secret
 
 
 BackendResolver = Callable[[dict[str, Any]], EvaluationBackend]
@@ -48,6 +50,8 @@ def create_model_evaluation_backend_resolver(
         backend_name = str(run.get("backend") or values.get("default_backend") or "mock").lower()
         if backend_name == "mock":
             return DeterministicMockBackend()
+        if backend_name == "native":
+            return NativeEvaluationBackend()
         if backend_name != "evalscope":
             raise ValueError(f"不支持的模型评测后端：{backend_name}")
         requested_version = str(run.get("backend_version") or version).strip()
@@ -76,16 +80,29 @@ def create_model_evaluation_backend_resolver(
     return resolve
 
 
-def _resolve_request_secrets(task_config: dict[str, Any]) -> dict[str, str]:
+def _resolve_request_secrets(
+    task_config: dict[str, Any],
+    *,
+    platform_store: PlatformRepository,
+    model_profile_id: str,
+) -> dict[str, str]:
     source_name = str(task_config.pop("api_key_env", "") or "").strip()
-    if not source_name:
+    if source_name:
+        if not _ENV_NAME.fullmatch(source_name):
+            raise ValueError("api_key_env 不是有效的环境变量名")
+        value = os.environ.get(source_name, "")
+        if not value:
+            raise RuntimeError(f"模型评测凭据环境变量未设置：{source_name}")
+        return {"LIEMA_EVAL_MODEL_API_KEY": value}
+    if not model_profile_id:
         return {}
-    if not _ENV_NAME.fullmatch(source_name):
-        raise ValueError("api_key_env 不是有效的环境变量名")
-    value = os.environ.get(source_name, "")
-    if not value:
-        raise RuntimeError(f"模型评测凭据环境变量未设置：{source_name}")
-    return {"LIEMA_EVAL_MODEL_API_KEY": value}
+    profile = platform_store.get_model_profile(model_profile_id)
+    if not profile:
+        raise RuntimeError("被测模型配置不存在")
+    encrypted = str(profile.get("api_key_enc") or "")
+    if not encrypted:
+        return {}
+    return {"LIEMA_EVAL_MODEL_API_KEY": decrypt_secret(encrypted)}
 
 
 class ModelEvaluationManager:
@@ -199,7 +216,11 @@ class ModelEvaluationManager:
             )
             snapshot = dict(run.get("snapshot") or {})
             task_config = dict(snapshot.get("task_config") or {})
-            secret_env = _resolve_request_secrets(task_config)
+            secret_env = _resolve_request_secrets(
+                task_config,
+                platform_store=self.platform_store,
+                model_profile_id=str(run.get("model_profile_id") or ""),
+            )
             request = EvaluationRequest(
                 run_id=run_id,
                 project_id=project_id,
@@ -219,6 +240,7 @@ class ModelEvaluationManager:
                 should_stop=lambda: self._stop.is_set()
                 or self.platform_store.is_model_eval_run_stop_requested(run_id),
             )
+            self._persist_case_results(project_id, run_id, result.raw)
             self.artifact_storage.publish_tree(work_dir)
             error = result.error_type if result.status == "failed" else ""
             return self.platform_store.finish_model_eval_run(
@@ -244,6 +266,45 @@ class ModelEvaluationManager:
         finally:
             with self._active_lock:
                 self._active_backend.pop(run_id, None)
+
+    def _persist_case_results(
+        self, project_id: str, run_id: str, raw: dict[str, Any]
+    ) -> None:
+        cases = list(raw.get("cases") or [])
+        if not cases:
+            cases = [
+                item
+                for item in list(raw.get("samples") or [])
+                if "/predictions/" in "/" + str(item.get("path") or "").replace("\\", "/")
+            ]
+        normalized = []
+        for index, item in enumerate(cases, start=1):
+            metrics = dict(item.get("metrics") or {})
+            if not metrics:
+                metrics = {key: value for key, value in item.items() if key not in {"score", "response"}}
+            score = item.get("score")
+            if not isinstance(score, dict):
+                score = {"score": score} if score is not None else {}
+            normalized.append(
+                {
+                    "case_id": str(
+                        item.get("case_id")
+                        or item.get("case_key")
+                        or item.get("id")
+                        or item.get("index")
+                        or f"result-{index}"
+                    ),
+                    "attempt": int(item.get("attempt") or 1),
+                    "status": str(item.get("status") or ("error" if item.get("error") else "completed")),
+                    "metrics": metrics,
+                    "score": score,
+                    "artifact_ref": str(item.get("path") or ""),
+                }
+            )
+        if normalized:
+            self.platform_store.save_model_eval_case_results(
+                project_id, run_id, normalized
+            )
 
     def _loop(self) -> None:
         while not self._stop.is_set():

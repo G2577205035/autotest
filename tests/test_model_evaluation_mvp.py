@@ -1,0 +1,269 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from tests import bootstrap  # noqa: F401
+
+from auto_test.evaluation.backends.native import NativeEvaluationBackend
+from auto_test.evaluation.catalog import ensure_builtin_evaluation_suites
+from auto_test.evaluation.contracts import EvaluationRequest
+from auto_test.evaluation.model_client import ObservedModelResponse
+from auto_test.evaluation.result_mapper import EvalScopeResultMapper
+from auto_test.evaluation.robustness import summarize_robustness
+from auto_test.evaluation.scoring import estimate_token_count, score_response
+from auto_test.platform.api import create_platform_api
+from auto_test.platform.artifact_storage import LocalArtifactStorage
+from auto_test.platform.identity import create_identity_api, install_identity_guard
+from auto_test.platform.store import PlatformStore
+from auto_test.platform.task_store import TaskStore
+
+
+ADMIN_PASSWORD = "StrongAdmin!2026"
+
+
+class EvaluationMvpDomainTests(unittest.TestCase):
+    def test_builtin_catalog_is_idempotent_and_hash_versioned(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = PlatformStore(Path(temp_dir) / "platform.db", recover_jobs=False)
+            first = ensure_builtin_evaluation_suites(store)
+            second = ensure_builtin_evaluation_suites(store)
+
+            self.assertEqual(len(first), 3)
+            self.assertEqual(
+                [item["latest_version"]["id"] for item in first],
+                [item["latest_version"]["id"] for item in second],
+            )
+            self.assertEqual(sum(item["case_count"] for item in second), 26)
+            for item in second:
+                self.assertEqual(len(item["latest_version"]["content_sha256"]), 64)
+
+    def test_rule_scoring_token_estimate_and_robustness_guard(self):
+        scored = score_response(
+            '{"status":"ok","count":2}',
+            {
+                "json_schema": {
+                    "required": ["status", "count"],
+                    "types": {"status": "string", "count": "integer"},
+                }
+            },
+        )
+        self.assertTrue(scored["passed"])
+        self.assertGreater(estimate_token_count("中文 token 123"), 0)
+
+        robustness = summarize_robustness(
+            [
+                {
+                    "case_id": "base",
+                    "robustness_group": "g",
+                    "variant_type": "baseline",
+                    "score": {"score": 1.0},
+                },
+                {
+                    "case_id": "variant",
+                    "robustness_group": "g",
+                    "variant_type": "typo",
+                    "score": {"score": 0.8},
+                },
+                {
+                    "case_id": "weak-base",
+                    "robustness_group": "weak",
+                    "variant_type": "baseline",
+                    "score": {"score": 0.2},
+                },
+                {
+                    "case_id": "weak-variant",
+                    "robustness_group": "weak",
+                    "variant_type": "noise",
+                    "score": {"score": 0.2},
+                },
+            ]
+        )
+        self.assertEqual(robustness["average_retention"], 80.0)
+        weak = next(item for item in robustness["groups"] if item["group"] == "weak")
+        self.assertFalse(weak["available"])
+
+    def test_native_backend_writes_jsonl_csv_and_token_provenance(self):
+        class FakeClient:
+            def call(self, **_kwargs):
+                return ObservedModelResponse(
+                    text="READY",
+                    request_id="fake-1",
+                    http_status=200,
+                    finish_reason="stop",
+                    input_tokens=8,
+                    output_tokens=1,
+                    token_source="api_usage",
+                    ttft_ms=2.0,
+                    latency_ms=5.0,
+                    chunks=1,
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            backend = NativeEvaluationBackend(client=FakeClient())
+            result = backend.run(
+                EvaluationRequest(
+                    run_id="native-run",
+                    project_id="project-a",
+                    mode="eval",
+                    task_config={
+                        "api_url": "https://model.example.test/v1",
+                        "model": "test-model",
+                        "cases": [
+                            {
+                                "id": "case-1",
+                                "category": "instruction",
+                                "payload": {
+                                    "messages": [{"role": "user", "content": "只回复 READY"}],
+                                    "rules": {"exact_text": "READY"},
+                                },
+                            }
+                        ],
+                    },
+                    work_dir=root,
+                )
+            )
+
+            self.assertEqual(result.status, "completed")
+            self.assertEqual(result.summary["success_rate"], 100.0)
+            self.assertTrue(result.summary["token_usage"]["exact"])
+            self.assertTrue((root / "summary.json").is_file())
+            self.assertTrue((root / "responses.jsonl").is_file())
+            self.assertTrue((root / "performance_samples.csv").is_file())
+
+    def test_evalscope_mapper_normalizes_perf_stages(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            stage = root / "model" / "parallel_2_number_4"
+            stage.mkdir(parents=True)
+            (stage / "benchmark_summary.json").write_text(
+                json.dumps(
+                    {
+                        "Concurrency": 2,
+                        "Total Requests": 4,
+                        "Success Requests": 3,
+                        "Failed Requests": 1,
+                        "Req Throughput (req/s)": 2.5,
+                        "Output Throughput (tok/s)": 30.0,
+                        "Total Throughput (tok/s)": 50.0,
+                        "Avg TTFT (ms)": 10.0,
+                        "Avg Latency (s)": 0.2,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (stage / "benchmark_percentile.json").write_text(
+                json.dumps(
+                    [
+                        {"Percentiles": "50%", "TTFT (ms)": 8.0, "Latency (s)": 0.1},
+                        {"Percentiles": "95%", "TTFT (ms)": 15.0, "Latency (s)": 0.3},
+                        {"Percentiles": "99%", "TTFT (ms)": 18.0, "Latency (s)": 0.4},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            mapped = EvalScopeResultMapper().map_directory(root)
+
+            self.assertEqual(mapped["summary"]["mode"], "perf")
+            self.assertEqual(mapped["summary"]["success_rate"], 75.0)
+            self.assertEqual(mapped["summary"]["performance"]["ttft_p95_ms"], 15.0)
+            self.assertTrue((root / "summary.json").is_file())
+            self.assertTrue((root / "performance_samples.csv").is_file())
+
+
+class EvaluationMvpApiTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self.temp_dir.name)
+        self.store = PlatformStore(root / "platform.db", recover_jobs=False)
+        self.app = FastAPI()
+        platform_router, report_manager, _, _ = create_platform_api(
+            TaskStore(root / "tasks.db"),
+            platform_store=self.store,
+            artifact_storage=LocalArtifactStorage(root / "artifacts"),
+        )
+        self.evaluation_manager = report_manager.model_evaluation_manager
+        identity_router, service = create_identity_api(self.store)
+        self.app.include_router(platform_router)
+        self.app.include_router(identity_router)
+        install_identity_guard(self.app, service)
+        self.client = TestClient(self.app)
+        identity = self.client.post(
+            "/api/auth/setup",
+            json={
+                "username": "admin.evaluation",
+                "display_name": "评测管理员",
+                "password": ADMIN_PASSWORD,
+                "project_key": "EVALUATION",
+                "project_name": "模型评测项目",
+            },
+        )
+        self.assertEqual(identity.status_code, 201, identity.text)
+        self.identity = identity.json()
+        self.headers = {"X-CSRF-Token": self.identity["csrf_token"]}
+
+    def tearDown(self):
+        self.client.close()
+        self.temp_dir.cleanup()
+
+    def test_mock_run_api_monitor_results_artifacts_and_project_boundary(self):
+        bootstrap_response = self.client.get("/api/model-evaluation/bootstrap")
+        self.assertEqual(bootstrap_response.status_code, 200, bootstrap_response.text)
+        bootstrap_payload = bootstrap_response.json()
+        self.assertEqual(len(bootstrap_payload["suites"]), 3)
+        self.assertFalse(bootstrap_payload["runtime"]["evalscope_configured"])
+
+        submitted = self.client.post(
+            "/api/model-evaluation/runs",
+            headers=self.headers,
+            json={"run_kind": "mock", "plan": "quick"},
+        )
+        self.assertEqual(submitted.status_code, 202, submitted.text)
+        run_id = submitted.json()["id"]
+        finished = self.evaluation_manager.run_once()
+        self.assertEqual(finished["status"], "completed")
+
+        detail = self.client.get(f"/api/model-evaluation/runs/{run_id}")
+        results = self.client.get(f"/api/model-evaluation/runs/{run_id}/results")
+        events = self.client.get(f"/api/model-evaluation/runs/{run_id}/events")
+        summary = self.client.get(
+            f"/api/model-evaluation/runs/{run_id}/artifacts/summary"
+        )
+        performance = self.client.get(
+            f"/api/model-evaluation/runs/{run_id}/artifacts/performance"
+        )
+        self.assertEqual(detail.status_code, 200, detail.text)
+        self.assertEqual(results.status_code, 200, results.text)
+        self.assertEqual(results.json()["total"], 10)
+        self.assertGreaterEqual(len(events.json()["events"]), 3)
+        self.assertEqual(summary.status_code, 200, summary.text)
+        self.assertEqual(performance.status_code, 200, performance.text)
+        self.assertNotIn("api_key_enc", detail.text)
+
+        other = self.store.create_project("OTHER-EVAL", "其他评测项目")
+        hidden = self.client.get(
+            f"/api/model-evaluation/runs/{run_id}",
+            headers={"X-Project-ID": other["id"]},
+        )
+        self.assertEqual(hidden.status_code, 404)
+
+    def test_queued_run_can_be_stopped(self):
+        submitted = self.client.post(
+            "/api/model-evaluation/runs",
+            headers=self.headers,
+            json={"run_kind": "mock", "plan": "quick"},
+        )
+        run_id = submitted.json()["id"]
+        stopped = self.client.post(
+            f"/api/model-evaluation/runs/{run_id}/stop", headers=self.headers
+        )
+        self.assertEqual(stopped.status_code, 200, stopped.text)
+        self.assertEqual(stopped.json()["status"], "stopped")
+
+
+if __name__ == "__main__":
+    unittest.main()

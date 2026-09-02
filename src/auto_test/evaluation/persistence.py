@@ -66,6 +66,39 @@ class ModelEvaluationStoreMixin:
         item["progress"] = max(0, min(int(item.get("progress") or 0), 100))
         return item
 
+    @staticmethod
+    def _decode_model_eval_case(row) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        for source, target, fallback in (
+            ("tags_json", "tags", []),
+            ("payload_json", "payload", {}),
+        ):
+            try:
+                item[target] = json.loads(item.pop(source) or json.dumps(fallback))
+            except (TypeError, ValueError):
+                item[target] = fallback
+        item["weight"] = float(item.get("weight") or 0.0)
+        item["sort_order"] = int(item.get("sort_order") or 0)
+        return item
+
+    @staticmethod
+    def _decode_model_eval_case_result(row) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        for source, target in (
+            ("metrics_json", "metrics"),
+            ("score_json", "score"),
+        ):
+            try:
+                item[target] = json.loads(item.pop(source) or "{}")
+            except (TypeError, ValueError):
+                item[target] = {}
+        item["attempt"] = int(item.get("attempt") or 1)
+        return item
+
     def save_model_eval_suite(
         self,
         project_id: str | None,
@@ -226,6 +259,34 @@ class ModelEvaluationStoreMixin:
                 (version_id, str(project_id or "")),
             ).fetchone()
         return self._decode_model_eval_version(row)
+
+    def list_model_eval_suite_versions(
+        self, project_id: str, suite_id: str, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT v.*,s.project_id,s.name AS suite_name,
+                          (SELECT COUNT(*) FROM model_eval_cases c WHERE c.version_id=v.id) AS case_count
+                   FROM model_eval_suite_versions v JOIN model_eval_suites s ON s.id=v.suite_id
+                   WHERE v.suite_id=? AND (s.project_id=? OR s.project_id IS NULL)
+                   ORDER BY v.version DESC LIMIT ?""",
+                (suite_id, str(project_id or ""), max(1, min(int(limit), 500))),
+            ).fetchall()
+        return [self._decode_model_eval_version(row) or {} for row in rows]
+
+    def list_model_eval_suite_cases(
+        self, project_id: str, version_id: str, limit: int = 1000
+    ) -> list[dict[str, Any]]:
+        if not self.get_model_eval_suite_version(project_id, version_id):
+            return []
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT id,version_id,case_key,category,tags_json,payload_json,weight,sort_order
+                   FROM model_eval_cases WHERE version_id=?
+                   ORDER BY sort_order ASC,id ASC LIMIT ?""",
+                (version_id, max(1, min(int(limit), 5000))),
+            ).fetchall()
+        return [self._decode_model_eval_case(row) or {} for row in rows]
 
     def create_model_eval_run(
         self,
@@ -442,13 +503,14 @@ class ModelEvaluationStoreMixin:
             rows = connection.execute(
                 """SELECT id,project_id,model_profile_id,suite_version_id,backend,
                           backend_version,status,phase,progress,message,error,summary_json,
-                          artifact_ref,created_by,stop_requested,created_at,started_at,finished_at
+                          snapshot_json,artifact_ref,created_by,stop_requested,created_at,
+                          started_at,finished_at
                    FROM model_eval_runs WHERE project_id=?
                    ORDER BY created_at DESC LIMIT ?""",
                 (project_id, max(1, min(int(limit), 500))),
             ).fetchall()
         return [
-            self._decode_model_eval_run(row, include_snapshot=False) or {} for row in rows
+            self._decode_model_eval_run(row, include_snapshot=True) or {} for row in rows
         ]
 
     def list_model_eval_run_events(
@@ -472,3 +534,77 @@ class ModelEvaluationStoreMixin:
                 item["data"] = {}
             result.append(item)
         return result
+
+    def save_model_eval_case_results(
+        self, project_id: str, run_id: str, results: list[dict[str, Any]]
+    ) -> None:
+        if not self.get_model_eval_run(project_id, run_id):
+            raise KeyError(run_id)
+        with self._connection() as connection:
+            for index, result in enumerate(results, start=1):
+                case_id = str(result.get("case_id") or f"result-{index}")
+                if len(case_id) > 64:
+                    case_id = "sha256:" + hashlib.sha256(case_id.encode("utf-8")).hexdigest()[:56]
+                attempt = max(1, int(result.get("attempt") or 1))
+                metrics = dict(result.get("metrics") or {})
+                score = dict(result.get("score") or {})
+                assert_secret_free(metrics, path="model_eval_case_result.metrics")
+                assert_secret_free(score, path="model_eval_case_result.score")
+                existing = connection.execute(
+                    """SELECT id FROM model_eval_case_results
+                       WHERE run_id=? AND case_id=? AND attempt=?""",
+                    (run_id, case_id, attempt),
+                ).fetchone()
+                values = (
+                    str(result.get("status") or "completed")[:32],
+                    _canonical_json(metrics),
+                    _canonical_json(score),
+                    str(result.get("artifact_ref") or "")[:2000],
+                    time.time(),
+                )
+                if existing:
+                    connection.execute(
+                        """UPDATE model_eval_case_results SET status=?,metrics_json=?,
+                           score_json=?,artifact_ref=?,created_at=? WHERE id=?""",
+                        (*values, existing["id"]),
+                    )
+                else:
+                    connection.execute(
+                        """INSERT INTO model_eval_case_results(
+                           id,run_id,case_id,attempt,status,metrics_json,score_json,
+                           artifact_ref,created_at) VALUES(?,?,?,?,?,?,?,?,?)""",
+                        (uuid.uuid4().hex, run_id, case_id, attempt, *values),
+                    )
+
+    def list_model_eval_case_results(
+        self,
+        project_id: str,
+        run_id: str,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+        status: str = "",
+    ) -> tuple[list[dict[str, Any]], int]:
+        if not self.get_model_eval_run(project_id, run_id):
+            return [], 0
+        where = "run_id=?"
+        params: list[Any] = [run_id]
+        normalized_status = str(status or "").strip()
+        if normalized_status:
+            where += " AND status=?"
+            params.append(normalized_status)
+        with self._connection() as connection:
+            count_row = connection.execute(
+                f"SELECT COUNT(*) AS total FROM model_eval_case_results WHERE {where}",
+                tuple(params),
+            ).fetchone()
+            rows = connection.execute(
+                f"""SELECT id,run_id,case_id,attempt,status,metrics_json,score_json,
+                           artifact_ref,created_at FROM model_eval_case_results
+                    WHERE {where} ORDER BY created_at ASC,id ASC LIMIT ? OFFSET ?""",
+                (*params, max(1, min(int(limit), 1000)), max(0, int(offset))),
+            ).fetchall()
+        return (
+            [self._decode_model_eval_case_result(row) or {} for row in rows],
+            int(count_row["total"] or 0) if count_row else 0,
+        )

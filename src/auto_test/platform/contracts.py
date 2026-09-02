@@ -197,6 +197,12 @@ class PlatformRepository(Protocol):
     def get_model_eval_suite_version(
         self, project_id: str, version_id: str
     ) -> dict[str, Any] | None: ...
+    def list_model_eval_suite_versions(
+        self, project_id: str, suite_id: str, limit: int = 100
+    ) -> list[dict[str, Any]]: ...
+    def list_model_eval_suite_cases(
+        self, project_id: str, version_id: str, limit: int = 1000
+    ) -> list[dict[str, Any]]: ...
     def create_model_eval_run(
         self,
         project_id: str,
@@ -251,3 +257,15 @@ class PlatformRepository(Protocol):
     def list_model_eval_run_events(
         self, project_id: str, run_id: str, after_id: int = 0, limit: int = 1000
     ) -> list[dict[str, Any]]: ...
+    def save_model_eval_case_results(
+        self, project_id: str, run_id: str, results: list[dict[str, Any]]
+    ) -> None: ...
+    def list_model_eval_case_results(
+        self,
+        project_id: str,
+        run_id: str,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+        status: str = "",
+    ) -> tuple[list[dict[str, Any]], int]: ...
