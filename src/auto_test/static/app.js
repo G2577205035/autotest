@@ -11,7 +11,8 @@ const state = {
   serverProfiles: [], serverSessions: [], serverSessionId: "", closingServerSessionId: "", serverSessionMetricCursor: {}, serverSessionMetrics: {},
   stressReportJobId: "", dashboardRunsSignature: "",
   evaluationBootstrap: null, evaluationRuns: [], evaluationRunsSignature: "", evaluationRunsPage: 1, evaluationRunsPageSize: 7, selectedEvaluationRunId: "", evaluationEvents: [], evaluationResults: [], evaluationReport: null, evaluationReportRunId: "", evaluationReportCasesPage: 1, evaluationReportCasesPageSize: 8, evaluationSuites: [], evaluationComparisons: [], selectedEvaluationComparisonRunIds: [], evaluationComparisonResult: null,
-  pollTimer: null
+  activeRunId: "", interfaceVersions: [], interfaceVersionAssetId: "", interfaceScenarioDetail: null, listPages: {}, listFilters: {}, listMeta: {}, historyRequests: {}, stressHistory: [], reportsSucceeded: 0, evaluationResultsRunId: "", evaluationDetailRequest: 0,
+  listPageSizes: {}, listDefaultSizes: {}, pollTimer: null
 };
 const titles = {dashboard:"运行总览","new-run":"发起测试",monitor:"实时监控",stress:"服务器性能",reports:"报告中心",evaluation:"模型评测",models:"模型配置",interfaces:"接口中心",identity:"用户、项目与权限"};
 const subtitles = {
@@ -27,7 +28,7 @@ const subtitles = {
 };
 const stages = ["queued","preparing","stress","authentication","upload","parsing","translation","verification","ai_checks","export","reporting","completed"];
 const stageNames = {queued:"排队",preparing:"准备",stress:"压力测试",authentication:"登录",upload:"上传",parsing:"解析",translation:"翻译",verification:"校验",ai_checks:"AI检查",export:"导出",reporting:"报告",completed:"完成",failed:"失败",interrupted:"中断"};
-const statusNames = {authorized:"已授权待执行",queued:"排队中",preparing:"准备中",running:"运行中",scoring:"评分中",reporting:"报告中",completed:"已完成",stopped:"已停止",passed:"通过",error:"错误",succeeded:"已成功",failed:"失败",interrupted:"已中断",retrying:"重试中",draft:"草稿",published:"已发布",archived:"已归档"};
+const statusNames = {pending:"待执行",authorized:"已授权待执行",queued:"排队中",preparing:"准备中",running:"运行中",scoring:"评分中",reporting:"报告中",completed:"已完成",stopped:"已停止",passed:"通过",error:"错误",succeeded:"已成功",failed:"失败",interrupted:"已中断",retrying:"重试中",draft:"草稿",published:"已发布",archived:"已归档"};
 const stressPresetNames = {health:"在线体检",quick:"快速验证",standard:"标准测试",stability:"稳定性测试",custom:"自定义"};
 const stressModeNames = {monitor:"监控",cpu:"CPU",gpu:"GPU"};
 
@@ -37,6 +38,88 @@ function esc(value) {
   });
 }
 function shortId(value) { return value ? String(value).slice(0, 10) : "—"; }
+function listPageSize(key, fallback=10) { return state.listPageSizes[key]||fallback; }
+function renderListPager(key, data) {
+  const total=Number(data.total)||0,size=Number(data.page_size)||10;
+  const pages=Math.max(1,Number(data.total_pages)||Math.ceil(total/size));
+  const page=Math.min(pages,Math.max(1,Number(data.page)||1));
+  state.listPages[key]=page;state.listMeta[key]={total:total,page:page,page_size:size,total_pages:pages};
+  const node=$("#"+key+"Pagination");if(!node)return;
+  const start=total?(page-1)*size+1:0,end=Math.min(page*size,total);
+  const summary='共 '+total+' 条'+(total?' · 当前 '+start+'–'+end+' 条':'');
+  if(!state.listDefaultSizes[key])state.listDefaultSizes[key]=size;
+  const sizes=Array.from(new Set([state.listDefaultSizes[key],size,10,20,50,100])).sort(function(a,b){return a-b;});
+  // Keep the controls mounted during polling so a page being typed is not lost.
+  if(node.dataset.pagerKey!==key||!node.querySelector('[data-page-summary]')){
+    node.innerHTML='<span data-page-summary role="status" aria-live="polite"></span><div class="pagination-controls"><label class="pagination-size">每页 <select data-list-size="'+esc(key)+'" aria-label="每页显示条数"></select> 条</label><div class="pagination-navigation"><button class="text-button" type="button" data-list-page="'+esc(key)+'" data-page-prev>上一页</button><b data-page-indicator></b><button class="text-button" type="button" data-list-page="'+esc(key)+'" data-page-next>下一页</button></div><div class="pagination-jump"><label>跳至 <input type="number" inputmode="numeric" min="1" step="1" data-list-jump-input="'+esc(key)+'" aria-label="跳转页码"> 页</label><button class="text-button" type="button" data-list-jump="'+esc(key)+'">跳转</button></div></div>';
+    node.dataset.pagerKey=key;
+  }
+  node.querySelector('[data-page-summary]').textContent=summary;
+  node.querySelector('[data-page-indicator]').textContent='第 '+page+' / '+pages+' 页';
+  const select=node.querySelector('[data-list-size]'),options=sizes.map(function(n){return '<option value="'+n+'">'+n+'</option>';}).join('');
+  if(select.innerHTML!==options)select.innerHTML=options;
+  select.value=String(size);
+  const prev=node.querySelector('[data-page-prev]'),next=node.querySelector('[data-page-next]');
+  prev.dataset.page=String(page-1);prev.disabled=page<=1;next.dataset.page=String(page+1);next.disabled=page>=pages;
+  const input=node.querySelector('[data-list-jump-input]');input.max=String(pages);input.disabled=!total;
+  if(document.activeElement!==input)input.value=String(page);
+  node.querySelector('[data-list-jump]').disabled=!total;
+  node.setAttribute('aria-busy','false');
+}
+function listPage(key, items, size, filter) {
+  size=listPageSize(key,size);
+  if(filter!==undefined&&state.listFilters[key]!==filter){state.listFilters[key]=filter;state.listPages[key]=1;}
+  const pages=Math.max(1,Math.ceil(items.length/size));
+  const page=Math.min(pages,Math.max(1,Number(state.listPages[key])||1));
+  renderListPager(key,{total:items.length,page:page,page_size:size,total_pages:pages});
+  return {items:items.slice((page-1)*size,page*size),page:page};
+}
+async function loadHistoryPage(key, path, field, render) {
+  const project=state.projectId,page=state.listPages[key]||1,size=listPageSize(key);
+  const request={};state.historyRequests[key]=request;
+  try {
+    const data=await api(path+'?page='+page+'&page_size='+size);
+    if(project!==state.projectId||state.historyRequests[key]!==request)return;
+    renderListPager(key,data);render(data);
+  } catch(error) {
+    if(project!==state.projectId||state.historyRequests[key]!==request)return;
+    const node=$("#"+key+"Pagination");
+    if(node){node.dataset.signature='';node.setAttribute('aria-busy','false');node.innerHTML='<span role="alert">列表加载失败，请重试</span><div><button class="text-button" type="button" data-list-page="'+key+'" data-page="'+page+'">重试</button></div>';}
+    console.warn(field+' pagination:',error);
+  }
+}
+function loadStressHistory(){return loadHistoryPage('stressJobs','/api/stress-jobs','jobs',function(data){state.stressHistory=data.jobs||[];renderStressJobsTable();});}
+function loadScenarioHistory(){return loadHistoryPage('interfaceScenarioRuns','/api/interface-scenario-runs','runs',function(data){state.interfaceScenarioRuns=data.runs||[];renderInterfaceScenarioRuns();});}
+function changeListPage(key, requested) {
+  const info=state.listMeta[key]||{total_pages:1};
+  state.listPages[key]=Math.min(info.total_pages,Math.max(1,Math.trunc(Number(requested))||1));
+  if(key.startsWith('evaluationSection_')){renderEvaluationReportSections(state.evaluationReport,key.startsWith('evaluationSection_intro_'),key);return;}
+  const legacy={evaluationRuns:renderEvaluationRuns,evaluationReportCases:function(){renderEvaluationReport(state.evaluationReport);},identityUsers:renderIdentityUsers,identityProjects:renderIdentityProjects,identityRoles:renderIdentityRoles};
+  if(legacy[key]){state[key+'Page']=state.listPages[key];legacy[key]();resetListScroll(key);return;}
+  if(key==='identityAudit'){state.identityAuditPage=state.listPages[key];loadIdentityAudit(state.identityAuditPage);resetListScroll(key);return;}
+  if(key==="evaluationSuiteCases"){loadEvaluationSuiteCases();$("#evaluationSuiteDrawerBody").scrollTop=0;return;}
+  const remote={reportJobs:loadReports,stressJobs:loadStressHistory,interfaceScenarioRuns:loadScenarioHistory,evaluationResults:refreshSelectedEvaluationRun};
+  if(remote[key]){const node=$("#"+key+"Pagination");if(node)node.setAttribute('aria-busy','true');remote[key]();resetListScroll(key);return;}
+  const renders={recentRuns:function(){state.dashboardRunsSignature='';renderDashboard(state.activeRunId);},serverProfiles:renderServerProfiles,models:renderModels,interfaceAssets:renderInterfaceAssets,interfaceEnvironments:renderInterfaceEnvironments,interfaceVariables:renderInterfaceVariables,interfaceScenarios:renderInterfaceScenarios,evaluationSuites:renderEvaluationSuites,evaluationComparison:renderEvaluationComparison,evaluationComparisonResults:renderEvaluationComparison,identityMembers:renderIdentityMembers,interfaceVersions:renderInterfaceVersions,scenarioSteps:function(){if(state.interfaceScenarioDetail)renderInterfaceScenarioRunDetail(state.interfaceScenarioDetail);}};
+  if(renders[key]){renders[key]();resetListScroll(key);}
+}
+function resetListScroll(key){
+  const pager=$('#'+key+'Pagination'),content=pager&&pager.previousElementSibling;
+  if(content)content.scrollTop=0;
+}
+function changeListPageSize(key, requested){
+  const size=Number(requested),info=state.listMeta[key];
+  if(!info||![state.listDefaultSizes[key],info.page_size,10,20,50,100].includes(size))return;
+  state.listPageSizes[key]=size;
+  if(key==='evaluationRuns'||key==='evaluationReportCases'||key==='identityAudit')state[key+'PageSize']=size;
+  changeListPage(key,1);
+}
+function jumpListPage(input){
+  const key=input.dataset.listJumpInput,info=state.listMeta[key];if(!info||input.disabled)return;
+  const value=Number(input.value);
+  if(!input.value.trim()||!Number.isInteger(value)||value<1||value>info.total_pages){input.setCustomValidity('请输入 1 到 '+info.total_pages+' 之间的整数页码');input.reportValidity();return;}
+  input.setCustomValidity('');changeListPage(key,value);
+}
 function runLabel(run) { return run && (run.display_name || shortId(run.id)); }
 function isLogNearBottom(node) {
   return node.scrollHeight - node.scrollTop - node.clientHeight <= 36;
@@ -182,6 +265,7 @@ function openStressResourcesOnce() {
   $("#stressStepResources").open=true;
 }
 function activateWorkspaceTab(group, name) {
+  if(group === "evaluation" && name !== "suites") closeEvaluationSuiteDrawer();
   if(group === "stress" && name !== "live") closeGpuDetailDrawer();
   $$('[data-workspace-tab="' + group + '"]').forEach(function(button){
     button.classList.toggle("active", button.dataset.workspaceTarget === name);
@@ -198,6 +282,7 @@ function activateWorkspaceTab(group, name) {
   if(group === "stress" && name === "setup") openStressResourcesOnce();
 }
 function gotoView(name) {
+  if(name !== "evaluation") closeEvaluationSuiteDrawer();
   if(name !== "stress") closeGpuDetailDrawer();
   $$(".nav-item").forEach(function(button){ button.classList.toggle("active", button.dataset.view === name); });
   $$(".view").forEach(function(view){ view.classList.toggle("active", view.id === "view-" + name); });
@@ -248,6 +333,7 @@ function businessProjectLabel(project) {
   return String((project && project.name) || (project && project.project_key) || "未命名业务项目");
 }
 function showAuth(setupRequired,message) {
+  closeEvaluationSuiteDrawer();
   clearInterval(state.pollTimer);
   state.pollTimer=null;
   state.identity=null;state.csrfToken="";state.projectId="";
@@ -320,9 +406,11 @@ async function logout() {
 }
 async function switchProject(projectId,returnView) {
   if(!projectId || projectId===state.projectId)return;
+  closeEvaluationSuiteDrawer();state.evaluationSuites=[];
   state.projectId=projectId;
   try {
     const identity=await api("/api/auth/status");
+    state.interfaceVersions=[];state.interfaceVersionAssetId="";state.interfaceScenarioDetail=null;state.listPages={};state.listFilters={};state.listMeta={};state.historyRequests={};state.stressHistory=[];state.evaluationResultsRunId="";state.reportsSucceeded=0;
     state.bootstrap=null;state.runs=[];state.reports=[];state.stressJobs=[];state.serverProfiles=[];state.serverSessions=[];state.serverSessionId="";state.selectedRunId="";state.monitorRunId="";state.stressJobId="";state.stressReportJobId="";state.dashboardRunsSignature="";state.logCursor={};state.metricCursor={};state.stressMetricCursor={};state.logs={};state.metrics={};state.stressMetrics={};state.interfaces=[];state.interfaceModules=[];state.interfaceEnvironments=[];state.interfaceVariables=[];state.interfaceScenarios=[];state.interfaceScenarioRuns=[];state.selectedInterfaceScenarioIds=[];state.selectedInterfaceModuleId="";state.evaluationBootstrap=null;state.evaluationRuns=[];state.evaluationRunsSignature="";state.evaluationRunsPage=1;state.selectedEvaluationRunId="";state.evaluationEvents=[];state.evaluationResults=[];state.evaluationReport=null;state.evaluationReportRunId="";state.evaluationReportCasesPage=1;
     await completeAuthentication(identity);
     gotoView(returnView || "dashboard");
@@ -477,6 +565,7 @@ async function refreshAll() {
 async function loadRuns() {
   const data = await api("/api/runs?limit=100");
   state.runs = data.runs || [];
+  state.activeRunId=data.active_run_id||"";
   state.selectedRunId = data.active_run_id || state.selectedRunId || (state.runs[0] && state.runs[0].id) || "";
   if (!state.monitorRunId) state.monitorRunId = state.selectedRunId;
   renderDashboard(data.active_run_id);
@@ -489,7 +578,7 @@ function renderDashboard(activeId) {
   $("#statRuns").textContent = String(runs.length);
   $("#statSuccess").textContent = terminal.length ? Math.round(success * 100 / terminal.length) + "%" : "—";
   $("#statActive").textContent = activeId ? "1" : "0";
-  $("#statReports").textContent = String(state.reports.filter(function(job){ return job.status === "succeeded"; }).length);
+  $("#statReports").textContent = String(state.reportsSucceeded);
   const active = runs.find(function(run){ return run.id === activeId; }) || runs.find(function(run){ return run.status === "queued"; });
   $(".dashboard-current-panel").classList.toggle("is-empty", !active);
   $("#activeRunEmpty").classList.toggle("hidden", Boolean(active));
@@ -510,7 +599,7 @@ function renderDashboard(activeId) {
   } else {
     pill.className = "status idle"; pill.textContent = "暂无任务";
   }
-  const recentRuns = runs.slice(0, 10);
+  const recentRuns = listPage("recentRuns", runs, 8).items;
   const recentSignature = JSON.stringify(recentRuns.map(function(run){
     const options = runOptions(run);
     return [run.id,run.status,run.stage,run.progress,run.message,run.started_at,run.finished_at,options.case_name,options.host,options.gpu_host,options.username,options.analysis,options.translate_name];
@@ -893,12 +982,17 @@ function updateAveragePeakMetric(id, list, unit) {
   const average = list.reduce(function(sum,value){ return sum + value; },0) / list.length;
   $("#" + id).textContent = average.toFixed(1) + unit + " / " + Math.max.apply(null,list).toFixed(1) + unit;
 }
+const chartFrames = new WeakMap();
 function drawChart(canvas, list, color, fixedMax, adaptiveScale) {
+  chartFrames.set(canvas, {list:list, color:color, fixedMax:fixedMax, adaptiveScale:adaptiveScale});
+  const palette = getComputedStyle(document.documentElement);
+  const colorToken = {"#4fb3ff":"--chart-blue", "#f6b94f":"--chart-gold", "#8f9dff":"--chart-indigo", "#d28cff":"--chart-purple"}[color];
+  color = (colorToken && palette.getPropertyValue(colorToken).trim()) || color;
   const rect = canvas.getBoundingClientRect(); const ratio = window.devicePixelRatio || 1;
   const width = Math.max(160, rect.width); const height = Math.max(54,Math.min(95,rect.height || 95));
   canvas.width = width * ratio; canvas.height = height * ratio;
   const ctx = canvas.getContext("2d"); ctx.scale(ratio, ratio); ctx.clearRect(0,0,width,height);
-  ctx.strokeStyle = "rgba(126,157,184,.24)"; ctx.lineWidth = 1;
+  ctx.strokeStyle = palette.getPropertyValue("--chart-grid").trim() || "rgba(126,157,184,.24)"; ctx.lineWidth = 1;
   [.25,.5,.75].forEach(function(position){const y=Math.round(height*position);ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(width,y);ctx.stroke();});
   if (list.length < 2) return;
   const data = list.slice(-120);
@@ -1397,7 +1491,7 @@ function renderServerProfiles() {
   $("#serverAssetCredential").textContent=String(credentialCount);
   $("#serverAssetAuthorization").textContent=String(state.serverProfiles.length-credentialCount);
   $("#serverProfileCount").textContent=String(profiles.length);
-  $("#serverProfileList").innerHTML=profiles.map(function(profile){
+  $("#serverProfileList").innerHTML=listPage("serverProfiles",profiles,8,query+"|"+statusFilter).items.map(function(profile){
     const session=sessionsByProfile[profile.id];
     const lastUsed=profile.last_used_at ? fmtTime(profile.last_used_at) : "尚未连接";
     return '<tr class="'+(session ? "connected" : "")+'"><td><div class="server-cell"><i></i><div><strong>'+esc(profile.name)+'</strong><small>'+esc(profile.host)+':'+esc(profile.port)+'</small></div></div></td><td><div class="server-account"><strong>'+esc(profile.user)+'</strong><small>SSH 用户</small></div></td><td><span class="credential-policy '+(profile.credential_saved ? "saved" : "temporary")+'">'+(profile.credential_saved ? "加密保存" : "每次输入")+'</span></td><td><span class="server-session-state '+(session ? "connected" : "disconnected")+'"><i></i>'+(session ? "实时监控中" : "未连接")+'</span></td><td><time>'+esc(lastUsed)+'</time></td><td><div class="server-table-actions">'+(session ? '<button class="primary" type="button" data-session-open="'+esc(session.id)+'">查看监控</button>' : '<button class="primary" type="button" data-server-connect="'+esc(profile.id)+'">连接</button>')+'<button type="button" data-server-edit="'+esc(profile.id)+'">编辑</button><button class="danger" type="button" data-server-delete="'+esc(profile.id)+'" aria-label="删除 '+esc(profile.name)+'">删除</button></div></td></tr>';
@@ -1656,7 +1750,7 @@ async function loadStressJobs() {
     }
     populateStressSelect();
     populateStressReportSelect();
-    renderStressJobsTable();
+    await loadStressHistory();
   } catch (error) { console.warn(error); }
 }
 function populateStressSelect() {
@@ -1678,7 +1772,7 @@ function populateStressReportSelect() {
   $("#downloadStressPdfButton").disabled=!state.stressReportJobId;
 }
 function renderStressJobsTable() {
-  $("#stressJobsBody").innerHTML = state.stressJobs.map(function(job){
+  $("#stressJobsBody").innerHTML = state.stressHistory.map(function(job){
     const message=String(job.message || job.error || "");
     const credentialIssue=/凭据|重新授权|SSH/.test(message);
     const pending=["authorized","queued"].includes(job.status);
@@ -1695,7 +1789,7 @@ function renderStressJobsTable() {
   }).join("") || '<tr><td colspan="6">暂无服务器性能测试记录</td></tr>';
 }
 function retryStressJob(jobId) {
-  const job=state.stressJobs.find(function(item){return item.id === jobId;});
+  const job=state.stressJobs.concat(state.stressHistory).find(function(item){return item.id === jobId;});
   if(!job) { toast("没有找到原任务配置",true); return; }
   state.stressJobId=jobId;
   const options=job.options || {};
@@ -1917,15 +2011,16 @@ async function downloadStressReport(format, selectedJobId) {
   } catch (error) { toast("压测报告下载失败：" + error.message, true); }
 }
 async function loadReports() {
-  try {
-    const data = await api("/api/reports?limit=100");
-    state.reports = data.reports || [];
-    $("#statReports").textContent = String(state.reports.filter(function(x){ return x.status === "succeeded"; }).length);
+  await loadHistoryPage("reportJobs", "/api/reports", "reports", function(data){
+    state.reports=data.reports||[];state.reportsSucceeded=Number(data.succeeded)||0;
+    $("#statReports").textContent=String(state.reportsSucceeded);renderReportJobs();
+  });
+}
+function renderReportJobs() {
     $("#reportJobsBody").innerHTML = state.reports.map(function(job){
       const files = job.status === "succeeded" ? '<button class="text-button report-download" data-id="' + job.id + '" data-format="docx">DOCX</button><button class="text-button report-download" data-id="' + job.id + '" data-format="pdf">PDF</button>' : esc(job.message || "—");
       return "<tr><td class=\"mono\">" + shortId(job.id) + "</td><td class=\"mono\">" + shortId(job.run_id) + "</td><td>v" + job.template_version + "</td><td>" + statusPill(job.status) + "</td><td>" + job.attempts + "/" + job.max_attempts + "</td><td>" + files + "</td></tr>";
     }).join("") || '<tr><td colspan="6">暂无报告任务</td></tr>';
-  } catch (error) { console.warn(error); }
 }
 async function loadTemplate() {
   try {
@@ -1973,7 +2068,7 @@ async function downloadReport(jobId, format) {
     link.href=url; link.download="xiaoyi_enterprise_test_report."+format; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
   } catch (error) { toast("下载失败：" + error.message,true); }
 }
-const evaluationKindLabels={mock:"Mock 流程验证",mock_full:"完整进阶流程验证",foundation:"基础能力与鲁棒性",translation:"中英双向翻译",wmt_translation:"WMT2024++ 标准翻译",report_writing:"报告写作能力",intelligence:"情报生产能力",standard_benchmark:"标准 Benchmark",concurrency:"并发阶梯",deep_performance:"深度性能与容量",custom:"项目自定义测试集"};
+const evaluationKindLabels={advanced_acceptance:"完整进阶流程验收",full:"全量测评（全部维度）",mock:"Mock 流程验证",mock_full:"完整进阶流程验证",foundation:"基础能力与鲁棒性",translation:"中英双向翻译",wmt_translation:"WMT2024++ 标准翻译",report_writing:"报告写作能力",intelligence:"情报生产能力",standard_benchmark:"标准 Benchmark",concurrency:"并发阶梯",deep_performance:"深度性能与容量",custom:"项目自定义测试集"};
 const evaluationPlanLabels={quick:"快速体检",standard:"标准评测",deep:"深度评测"};
 const evaluationPhaseLabels={queued:"排队",preparing:"准备",running:"执行",scoring:"规则评分",reporting:"报告",completed:"完成",failed:"失败",stopped:"已停止",stop_requested:"安全停止中"};
 function evaluationActive(run){return Boolean(run&&["queued","preparing","running","scoring","reporting","stop_requested"].includes(run.status));}
@@ -2005,16 +2100,19 @@ function syncEvaluationForm(){
   const kind=$("#evaluationRunKind").value;
   const info=evaluationKindInfo(kind);
   const mock=["mock","mock_full"].includes(kind);
-  const requiresEvalScope=["standard_benchmark","wmt_translation","concurrency","deep_performance"].includes(kind);
+  const requiresEvalScope=["full","standard_benchmark","wmt_translation","concurrency","deep_performance"].includes(kind);
   const runtime=(state.evaluationBootstrap&&state.evaluationBootstrap.runtime)||{};
   $("#evaluationRunKindHint").textContent=info.description||"选择评测范围。";
   $("#evaluationModelProfile").disabled=mock;
   if(mock) $("#evaluationModelProfile").value="";
-  $("#evaluationCustomSuiteField").classList.toggle("hidden",kind!=="custom");
-  $("#evaluationSubmitNote").textContent=mock?"Mock 运行不产生真实模型负载，可验收完整进阶流程。":requiresEvalScope?(runtime.evalscope_configured?"将使用锁定的 EvalScope "+runtime.evalscope_version+" 隔离运行；深度方案会记录固定 RPS、突发、持续和恢复观察配置。":"尚未配置 EvalScope Python 3.11 运行时，WMT、标准和性能评测暂不可提交。"):("专项能力逐条受控调用；规则、裁判和人工复核状态分开保存。最大输出 "+$("#evaluationMaxTokens").value+" Tokens。");
+  $("#evaluationCustomSuiteField").classList.toggle("hidden",!["custom","full"].includes(kind));
+  $("#evaluationPlan").disabled=kind==="full";if(kind==="full")$("#evaluationPlan").value="deep";$("#evaluationStream").disabled=kind==="full";
+  $("#evaluationSubmitNote").textContent=mock?"Mock 运行不产生真实模型负载，可验收完整进阶流程。":requiresEvalScope?(runtime.evalscope_configured?"将使用锁定的 EvalScope "+runtime.evalscope_version+" 隔离运行；深度方案执行有并发上限的 RPS 阶梯、突发、持续和恢复探测，错误率超限后停止增加负载。":"尚未配置 EvalScope Python 3.11 运行时，WMT、标准和性能评测暂不可提交。"):("专项能力逐条受控调用；规则、裁判和人工复核状态分开保存。最大输出 "+$("#evaluationMaxTokens").value+" Tokens。");
   const canOperate=hasPermission("evaluation:operate");
   const missingCustom=kind==="custom"&&!$("#evaluationSuiteVersion").value;
-  $("#evaluationSubmitButton").disabled=!canOperate||(requiresEvalScope&&!runtime.evalscope_configured)||missingCustom;
+  $("#evaluationFullButton").disabled=Boolean(state.evaluationSubmitting)||!canOperate||!runtime.evalscope_configured;
+  $("#evaluationSubmitButton").classList.toggle("hidden",kind==="full");
+  $("#evaluationSubmitButton").disabled=Boolean(state.evaluationSubmitting)||!canOperate||(requiresEvalScope&&!runtime.evalscope_configured)||missingCustom;
   if(!canOperate) $("#evaluationSubmitNote").textContent="当前项目角色可以查看评测结果，但不能发起或停止评测。";
 }
 function populateEvaluationModels(){
@@ -2023,11 +2121,17 @@ function populateEvaluationModels(){
   $("#evaluationModelProfile").innerHTML='<option value="">请选择模型配置</option>'+models.map(function(model){return '<option value="'+esc(model.id)+'">'+esc(model.name+" · "+model.model_name)+(model.has_api_key?"":" · 无鉴权")+'</option>';}).join("");
   if(models.some(function(model){return model.id===current;})) $("#evaluationModelProfile").value=current;
   else {const active=models.find(function(model){return model.is_active;});if(active)$("#evaluationModelProfile").value=active.id;}
+  const reportCurrent=$("#evaluationReportModel").value;
+  $("#evaluationReportModel").innerHTML='<option value="">使用当前启用的报告模型</option>'+models.map(function(model){return '<option value="'+esc(model.id)+'">'+esc(model.name+" · "+model.model_name)+'</option>';}).join("");
+  if(models.some(function(model){return model.id===reportCurrent;}))$("#evaluationReportModel").value=reportCurrent;
   const judgeCurrent=$("#evaluationJudgeProfile").value;
   $("#evaluationJudgeProfile").innerHTML='<option value="">不使用裁判模型</option>'+models.map(function(model){return '<option value="'+esc(model.id)+'">'+esc(model.name+" · "+model.model_name)+'</option>';}).join("");
   if(models.some(function(model){return model.id===judgeCurrent;}))$("#evaluationJudgeProfile").value=judgeCurrent;
   const sessions=(state.evaluationBootstrap&&state.evaluationBootstrap.server_sessions)||[];
-  $("#evaluationServerSession").innerHTML='<option value="">不关联服务器资源</option>'+sessions.map(function(session){return '<option value="'+esc(session.id)+'">'+esc(session.name||session.host||"活动服务器")+'</option>';}).join("");
+  const assets=(state.evaluationBootstrap&&state.evaluationBootstrap.server_profiles)||[];
+  const currentResource=$("#evaluationServerSession").value;
+  $("#evaluationServerSession").innerHTML='<option value="">不关联服务器资源</option>'+assets.map(function(asset){return '<option value="asset:'+esc(asset.id)+'">已保存 · '+esc(asset.name||asset.host)+'</option>';}).join("")+sessions.map(function(session){return '<option value="'+esc(session.id)+'">'+esc(session.name||session.host||"活动服务器")+'</option>';}).join("");
+  if(Array.from($("#evaluationServerSession").options).some(function(option){return option.value===currentResource;}))$("#evaluationServerSession").value=currentResource;
 }
 function populateEvaluationSuites(){
   const suites=state.evaluationSuites||[];
@@ -2037,13 +2141,79 @@ function populateEvaluationSuites(){
   if(projectSuites.some(function(item){return item.latest_version.id===current;}))$("#evaluationSuiteVersion").value=current;
 }
 function evaluationSuiteSourceLabel(suite){return suite.project_id?"项目测试集":((suite.source==="evalscope_standard")?"EvalScope 标准集":"平台内置集");}
+let evaluationSuiteDetail = null;
+let evaluationSuiteRequest = 0;
+let evaluationSuiteReturnFocus = null;
+function closeEvaluationSuiteDrawer(){
+  const drawer=$("#evaluationSuiteDrawer");
+  evaluationSuiteRequest++;evaluationSuiteDetail=null;
+  if(drawer&&drawer.open)drawer.close();
+}
+function evaluationSuiteText(value){if(Array.isArray(value)&&value.every(function(item){return typeof item!=="object";}))return value.join("、");return typeof value==="string"?value:JSON.stringify(value,null,2);}
+function evaluationSuiteField(label,value){
+  if(value==null||value==="")return "";
+  return '<section class="evaluation-suite-field"><h5>'+esc(label)+'</h5><pre>'+esc(evaluationSuiteText(value))+'</pre></section>';
+}
+function renderEvaluationSuiteCase(item,index){
+  const payload=item.payload||{};
+  const roles={system:"系统指令",user:"用户输入",assistant:"助手消息",tool:"工具消息"};
+  const messages=Array.isArray(payload.messages)?payload.messages:[];
+  let body=messages.map(function(message){return evaluationSuiteField(roles[message.role]||"输入消息",message.content);}).join("");
+  body+=evaluationSuiteField("测试输入",payload.prompt||payload.question||payload.source);
+  body+=evaluationSuiteField("参考答案",payload.reference||payload.reference_answer||payload.answer||payload.target);
+  body+=evaluationSuiteField("参考答案集合",payload.references);
+  body+=evaluationSuiteField("预期结果",payload.expected);
+  const rules=payload.rules||{};
+  const ruleLabels={fact_normalization:"事实匹配方式",forbidden_terms:"禁止出现的内容",min_chars:"最少字符数",max_chars:"最多字符数",required_facts:"必需事实",exact_text:"完全匹配",contains:"包含内容",not_contains:"禁止内容",required_terms:"必需术语",required_entities:"必需实体",required_numbers:"必需数值",required_dates:"必需日期",protected_spans:"保护片段",required_sections:"必需章节",json_schema:"JSON 结构要求",min_reference_similarity:"参考答案相似度下限",max_length:"最大长度",min_length:"最小长度"};
+  const ruleRows=Object.entries(rules).map(function(entry){return evaluationSuiteField(ruleLabels[entry[0]]||entry[0],entry[0]==="fact_normalization"&&entry[1]==="presentation"?"允许日期、金额等事实采用等价表达":entry[1]);}).join("");
+  if(ruleRows)body+='<section class="evaluation-suite-rules"><h4>评分规则</h4>'+ruleRows+'</section>';
+  body+=evaluationSuiteField("裁判评分维度",payload.rubric);
+  if(!body)body='<p class="muted">该用例采用适配器配置，完整内容见下方。</p>';
+  body+='<details class="evaluation-suite-raw"><summary>完整用例数据</summary><pre>'+esc(JSON.stringify(item,null,2))+'</pre></details>';
+  return '<details class="evaluation-suite-case"'+(index===0?' open':'')+'><summary><span><strong>'+esc(payload.name||item.name||item.case_key||"未命名用例")+'</strong><small>用例 '+esc(item.sort_order||((state.listPages.evaluationSuiteCases||1)-1)*listPageSize("evaluationSuiteCases",5)+index+1)+' · '+esc(item.category||"通用")+'</small></span></summary><div class="evaluation-suite-case-body">'+body+'</div></details>';
+}
+async function loadEvaluationSuiteCases(){
+  const detail=evaluationSuiteDetail;if(!detail)return;
+  const request=++evaluationSuiteRequest,project=state.projectId;
+  const current=function(){return request===evaluationSuiteRequest&&detail===evaluationSuiteDetail&&project===state.projectId;};
+  const casesNode=$("#evaluationSuiteCases"),pager=$("#evaluationSuiteCasesPagination");
+  casesNode.innerHTML='<p role="status">正在加载测试用例…</p>';casesNode.setAttribute("aria-busy","true");
+  pager.setAttribute('aria-busy','true');
+  try{
+    const page=state.listPages.evaluationSuiteCases||1;
+    const data=await api("/api/model-evaluation/suites/"+encodeURIComponent(detail.id)+"/versions/"+encodeURIComponent(detail.latest_version.id)+"?page="+page+"&page_size="+listPageSize("evaluationSuiteCases",5));
+    if(!current())return;
+    const version=data.version||{};
+    $("#evaluationSuiteVersionMeta").innerHTML='<dl><div><dt>版本</dt><dd>v'+esc(version.version)+'</dd></div><div><dt>用例数量</dt><dd>'+esc(data.total)+' 条</dd></div><div><dt>发布时间</dt><dd>'+esc(fmtTime(version.published_at))+'</dd></div><div><dt>内容校验值（SHA-256）</dt><dd class="mono">'+esc(version.content_sha256)+'</dd></div></dl><details class="evaluation-suite-raw"><summary>版本与来源信息</summary><pre>'+esc(JSON.stringify({manifest:version.manifest||{},upstream:version.upstream||{}},null,2))+'</pre></details>';
+    renderListPager("evaluationSuiteCases",data);
+    casesNode.innerHTML=(data.cases||[]).map(renderEvaluationSuiteCase).join("")||'<p class="muted">该版本暂无测试用例。</p>';
+  }catch(error){
+    if(!current())return;
+    casesNode.innerHTML='<p role="alert">测试用例加载失败：'+esc(error.message)+'</p><button type="button" class="button secondary" data-evaluation-suite-retry>重新加载</button>';
+  }finally{if(current()){casesNode.setAttribute("aria-busy","false");pager.setAttribute('aria-busy','false');}}
+}
+function openEvaluationSuiteDrawer(suiteId,trigger){
+  const suite=state.evaluationSuites.find(function(item){return item.id===suiteId;});if(!suite)return;
+  evaluationSuiteDetail=suite;evaluationSuiteRequest++;evaluationSuiteReturnFocus=trigger||document.activeElement;
+  state.listPages.evaluationSuiteCases=1;
+  $("#evaluationSuiteDrawerTitle").textContent=suite.name||"测试集详情";
+  $("#evaluationSuiteDrawerSource").textContent=evaluationSuiteSourceLabel(suite)+" · "+(evaluationKindLabels[suite.category]||suite.category||"通用");
+  $("#evaluationSuiteDrawerDescription").textContent=suite.description||"暂无测试集说明";
+  $("#evaluationSuiteVersionMeta").innerHTML="";
+  $("#evaluationSuiteCasesPagination").innerHTML="";$("#evaluationSuiteCasesPagination").dataset.signature="";
+  $("#evaluationSuiteDrawerBody").scrollTop=0;
+  const drawer=$("#evaluationSuiteDrawer");if(!drawer.open)drawer.showModal();
+  $("#closeEvaluationSuiteDrawer").focus();
+  if((suite.latest_version||{}).id)loadEvaluationSuiteCases();
+  else{$("#evaluationSuiteCases").setAttribute("aria-busy","false");$("#evaluationSuiteCases").innerHTML='<p class="muted">尚未发布版本。导入素材并发布后，可在这里查看完整用例。</p>';}
+}
 function renderEvaluationSuites(){
   const suites=state.evaluationSuites||[];
-  $("#evaluationSuiteList").innerHTML=suites.map(function(suite){
+  $("#evaluationSuiteList").innerHTML=listPage("evaluationSuites",suites,4).items.map(function(suite){
     const latest=suite.latest_version||{};const isProject=Boolean(suite.project_id);
     const meta=latest.id?("v"+latest.version+" · "+latest.case_count+" 条 · "+shortId(latest.content_sha256)):"尚未发布版本";
     const actions=isProject?(hasPermission("evaluation:manage")?'<label class="evaluation-suite-upload"><input type="file" data-evaluation-suite-file accept=".json,.jsonl,.csv,.zip,.txt,.md,.docx,.pdf"><span>选择素材</span></label><button class="button secondary" type="button" data-evaluation-suite-import="'+esc(suite.id)+'">校验并发布新版本</button>':'<span class="muted">仅管理员可发布版本</span>'):(hasPermission("evaluation:manage")?'<button class="button secondary" type="button" data-evaluation-suite-clone="'+esc(suite.id)+'">复制到当前项目</button>':'');
-    return '<article class="evaluation-suite-card"><header><div><span>'+esc(evaluationSuiteSourceLabel(suite))+'</span><strong>'+esc(suite.name)+'</strong></div>'+statusPill(suite.status)+'</header><p>'+esc(suite.description||"暂无说明")+'</p><dl><div><dt>能力分类</dt><dd>'+esc(evaluationKindLabels[suite.category]||suite.category||"通用")+'</dd></div><div><dt>最新版本</dt><dd>'+esc(meta)+'</dd></div></dl><footer>'+actions+'</footer></article>';
+    return '<article class="evaluation-suite-card"><header><div><span>'+esc(evaluationSuiteSourceLabel(suite))+'</span><strong>'+esc(suite.name)+'</strong></div>'+statusPill(suite.status)+'</header><p>'+esc(suite.description||"暂无说明")+'</p><dl><div><dt>能力分类</dt><dd>'+esc(evaluationKindLabels[suite.category]||suite.category||"通用")+'</dd></div><div><dt>最新版本</dt><dd>'+esc(meta)+'</dd></div></dl><footer><button class="button secondary" type="button" data-evaluation-suite-detail="'+esc(suite.id)+'" aria-haspopup="dialog" aria-controls="evaluationSuiteDrawer">查看详情</button>'+actions+'</footer></article>';
   }).join("")||'<div class="evaluation-empty-state"><strong>暂无测试集</strong><p>创建项目测试集并导入已授权、已脱敏的素材。</p></div>';
 }
 async function refreshEvaluationSuites(){
@@ -2066,12 +2236,12 @@ async function importEvaluationSuite(suiteId,button){
 function comparisonRankFor(result,runId){const item=(result.ranking||[]).find(function(row){return row.run_id===runId;});return item?String(item.rank):"—";}
 function renderEvaluationComparison(){
   const terminal=state.evaluationRuns.filter(evaluationTerminal);const selected=new Set(state.selectedEvaluationComparisonRunIds||[]);
-  $("#evaluationComparisonRunList").innerHTML=terminal.map(function(run){const snapshot=evaluationSnapshot(run),model=snapshot.model||{},summary=run.summary||{};return '<label class="evaluation-comparison-run"><input type="checkbox" data-evaluation-comparison-run="'+esc(run.id)+'" '+(selected.has(run.id)?"checked":"")+'><span><strong>'+esc(model.name||model.model_name||"未记录模型")+'</strong><small>'+esc(evaluationKindLabels[snapshot.run_kind]||snapshot.run_kind||run.backend)+' · '+esc(evaluationPlanLabels[snapshot.plan]||snapshot.plan||"—")+' · '+esc(fmtTime(run.created_at))+'</small></span><b>'+esc(summary.quality_score==null?"—":evaluationNumber(summary.quality_score,1)+" 分")+'</b></label>';}).join("")||'<p class="muted">当前项目还没有可对比的已结束运行。</p>';
+  $("#evaluationComparisonRunList").innerHTML=listPage("evaluationComparison",terminal,8).items.map(function(run){const snapshot=evaluationSnapshot(run),model=snapshot.model||{},summary=run.summary||{};return '<label class="evaluation-comparison-run"><input type="checkbox" data-evaluation-comparison-run="'+esc(run.id)+'" '+(selected.has(run.id)?"checked":"")+'><span><strong>'+esc(model.name||model.model_name||"未记录模型")+'</strong><small>'+esc(evaluationKindLabels[snapshot.run_kind]||snapshot.run_kind||run.backend)+' · '+esc(evaluationPlanLabels[snapshot.plan]||snapshot.plan||"—")+' · '+esc(fmtTime(run.created_at))+'</small></span><b>'+esc(summary.quality_score==null?"—":evaluationNumber(summary.quality_score,1)+" 分")+'</b></label>';}).join("")||'<p class="muted">当前项目还没有可对比的已结束运行。</p>';
   $("#createEvaluationComparisonButton").disabled=selected.size<2||selected.size>10||!hasPermission("evaluation:operate");
   const result=state.evaluationComparisonResult||(((state.evaluationComparisons[0]||{}).config||{}).result)||null;
-  if(!result){$("#evaluationComparisonResult").innerHTML='<p class="muted">请选择 2～10 个已结束运行。</p>';return;}
+  if(!result){$("#evaluationComparisonResult").innerHTML='<p class="muted">请选择 2～10 个已结束运行。</p>';listPage('evaluationComparisonResults',[],10);return;}
   const notice='<div class="evaluation-comparison-notice '+(result.comparable?"good":"warning")+'"><strong>'+(result.comparable?"口径一致，可生成排名":"口径不一致，仅并列展示")+'</strong><span>'+esc(result.notice||"")+(result.mismatches&&result.mismatches.length?" 差异："+esc(result.mismatches.join("、")):"")+'</span></div>';
-  const rows=(result.rows||[]).map(function(row){return '<tr><td>'+comparisonRankFor(result,row.run_id)+'</td><td><strong>'+esc(row.model_name)+'</strong><small class="table-subline">'+esc(shortId(row.run_id))+'</small></td><td>'+esc(row.quality_score==null?"—":evaluationNumber(row.quality_score,1))+'</td><td>'+esc(row.success_rate==null?"—":evaluationNumber(row.success_rate,1)+"%")+'</td><td>'+esc(row.latency_p95_ms==null?"—":evaluationNumber(row.latency_p95_ms,1)+" ms")+'</td><td>'+esc(row.output_tokens_per_second==null?"—":evaluationNumber(row.output_tokens_per_second,2))+'</td><td>'+esc(((row.capacity||{}).max_stable_concurrency)==null?"—":(row.capacity||{}).max_stable_concurrency)+'</td></tr>';}).join("");
+  const rows=listPage('evaluationComparisonResults',result.rows||[],10,JSON.stringify((result.rows||[]).map(row=>row.run_id))).items.map(function(row){return '<tr><td>'+comparisonRankFor(result,row.run_id)+'</td><td><strong>'+esc(row.model_name)+'</strong><small class="table-subline">'+esc(shortId(row.run_id))+'</small></td><td>'+esc(row.quality_score==null?"—":evaluationNumber(row.quality_score,1))+'</td><td>'+esc(row.success_rate==null?"—":evaluationNumber(row.success_rate,1)+"%")+'</td><td>'+esc(row.latency_p95_ms==null?"—":evaluationNumber(row.latency_p95_ms,1)+" ms")+'</td><td>'+esc(row.output_tokens_per_second==null?"—":evaluationNumber(row.output_tokens_per_second,2))+'</td><td>'+esc(((row.capacity||{}).max_stable_concurrency)==null?"—":(row.capacity||{}).max_stable_concurrency)+'</td></tr>';}).join("");
   $("#evaluationComparisonResult").innerHTML=notice+'<div class="table-wrap"><table><thead><tr><th>排名</th><th>模型 / 运行</th><th>质量分</th><th>成功率</th><th>P95</th><th>输出 Token/s</th><th>稳定并发</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
 }
 async function createEvaluationComparison(allowMismatch){
@@ -2092,9 +2262,10 @@ function renderEvaluationRuns(){
   const runtime=(state.evaluationBootstrap&&state.evaluationBootstrap.runtime)||{};
   $("#evaluationRuntimeState").textContent=runtime.evalscope_configured?("EvalScope "+runtime.evalscope_version):"Mock / 原生可用";
   $("#evaluationRuntimeHint").textContent=runtime.evalscope_configured?("EvalScope 已配置为隔离子进程，队列后端为 "+(runtime.queue_backend||"local")+"。"):("EvalScope 尚未配置；Mock 与原生基础评测可用，标准 Benchmark 和并发阶梯保持禁用。队列后端为 "+(runtime.queue_backend||"local")+"。");
-  const total=state.evaluationRuns.length;const totalPages=Math.max(1,Math.ceil(total/state.evaluationRunsPageSize));state.evaluationRunsPage=Math.min(Math.max(1,state.evaluationRunsPage),totalPages);const start=(state.evaluationRunsPage-1)*state.evaluationRunsPageSize;const pageRuns=state.evaluationRuns.slice(start,start+state.evaluationRunsPageSize);const end=Math.min(total,start+pageRuns.length);
-  $("#evaluationRunsPageSummary").textContent=total?("共 "+total+" 条 · 当前 "+(start+1)+"–"+end+" 条"):"共 0 条";$("#evaluationRunsPageIndicator").textContent="第 "+state.evaluationRunsPage+" / "+totalPages+" 页";$("#evaluationRunsPrevButton").disabled=state.evaluationRunsPage<=1;$("#evaluationRunsNextButton").disabled=state.evaluationRunsPage>=totalPages;
-  const signature=JSON.stringify({page:state.evaluationRunsPage,selected:state.selectedEvaluationRunId,canOperate:hasPermission("evaluation:operate"),canManage:hasPermission("evaluation:manage"),runs:state.evaluationRuns.map(function(run){return [run.id,run.status,run.phase,run.progress,run.artifact_ref,run.created_at];})});
+  state.listPages.evaluationRuns=state.evaluationRunsPage;
+  const paged=listPage("evaluationRuns",state.evaluationRuns,state.evaluationRunsPageSize);
+  state.evaluationRunsPage=paged.page;const pageRuns=paged.items;
+  const signature=JSON.stringify({page:state.evaluationRunsPage,size:listPageSize("evaluationRuns",7),selected:state.selectedEvaluationRunId,canOperate:hasPermission("evaluation:operate"),canManage:hasPermission("evaluation:manage"),runs:state.evaluationRuns.map(function(run){return [run.id,run.status,run.phase,run.progress,run.artifact_ref,run.created_at];})});
   if(signature===state.evaluationRunsSignature)return;
   state.evaluationRunsSignature=signature;
   $("#evaluationRunsBody").innerHTML=pageRuns.map(function(run){
@@ -2119,6 +2290,7 @@ function readableEvaluationEventMessage(item){
   return "阶段事件（历史记录编码异常）";
 }
 function renderEvaluationDetail(run,events,results,total){
+  const full=Boolean(run&&(run.snapshot||{}).run_kind==="full");const fullNode=$("#evaluationFullProgress");fullNode.classList.toggle("hidden",!full);$("#evaluationDetailPanel .evaluation-metric-grid").classList.toggle("hidden",full);fullNode.innerHTML=full?('<strong>全量专项进度 · '+esc((run.summary||{}).completed_stages||0)+'/'+esc((run.summary||{}).total_stages||((run.snapshot.task_config||{}).stages||[]).length)+'</strong><div>'+((run.summary||{}).stages||[]).map(function(stage){return '<article><span>'+esc(stage.label)+'</span>'+statusPill(stage.status)+'</article>';}).join("")+'</div>'):"";
   if(!run){$("#evaluationDetailTitle").textContent="选择一条评测查看运行监控";$("#evaluationDetailMessage").textContent="提交后可在这里查看 Token 来源、吞吐、P95/P99、错误分类与用例明细。";$("#evaluationPhaseLabel").textContent="尚未选择运行";$("#evaluationProgressLabel").textContent="0%";$("#evaluationProgressBar").style.width="0%";$("#stopEvaluationButton").classList.add("hidden");$("#deleteEvaluationButton").classList.add("hidden");$("#openEvaluationReportButton").disabled=true;$("#downloadEvaluationSummaryButton").disabled=true;$("#downloadEvaluationPerformanceButton").disabled=true;$("#evaluationScoringConfidence").textContent="—";$("#evaluationReviewState").textContent="规则 / 裁判 / 人工";$("#evaluationCapacity").textContent="—";$("#evaluationCapacityState").textContent="并发 / 拐点";$("#evaluationEventsList").innerHTML='<p class="muted">尚未选择运行。</p>';$("#evaluationResultsBody").innerHTML='<tr><td class="evaluation-empty-row" colspan="8">请先从“评测运行”中选择任务。</td></tr>';return;}
   const snapshot=evaluationSnapshot(run);const summary=Object.assign({},run.summary||{});const latestLiveEvent=[...(events||[])].reverse().find(function(item){const data=item.data||{};return data.success_rate!=null||data.p95_ms!=null||data.output_tokens_per_second!=null;});
   if(latestLiveEvent){const live=latestLiveEvent.data||{};if(summary.success_rate==null&&live.success_rate!=null)summary.success_rate=live.success_rate;summary.performance=Object.assign({},summary.performance||{});if(summary.performance.latency_p95_ms==null&&live.p95_ms!=null)summary.performance.latency_p95_ms=live.p95_ms;if(summary.performance.output_tokens_per_second==null&&live.output_tokens_per_second!=null)summary.performance.output_tokens_per_second=live.output_tokens_per_second;}
@@ -2133,7 +2305,7 @@ function renderEvaluationDetail(run,events,results,total){
   $("#downloadEvaluationSummaryButton").disabled=!run.artifact_ref;$("#downloadEvaluationPerformanceButton").disabled=!run.artifact_ref;
   $("#evaluationSuccessRate").textContent=summary.success_rate==null?"—":evaluationNumber(summary.success_rate,1)+"%";
   $("#evaluationQualityScore").textContent="质量分 "+(summary.quality_score==null?"—":evaluationNumber(summary.quality_score,1));
-  const sources=Object.keys(token.source_counts||{});const sourceLabels={api_usage:"API 精确",local_tokenizer:"本地 Tokenizer",estimated:"估算"};
+  const sources=Object.keys(token.source_counts||{});const sourceLabels={api_usage:"API 精确",local_tokenizer:"本地 Tokenizer",estimated:"估算",backend_reported:"后端汇总（未逐请求核验）"};
   $("#evaluationTokenSource").textContent=sources.length?sources.map(function(item){return sourceLabels[item]||item;}).join(" / "):"—";
   $("#evaluationTokenCount").textContent="总量 "+(token.total_tokens==null?"—":token.total_tokens);
   $("#evaluationLatency").textContent=(performance.latency_p95_ms==null?"—":evaluationNumber(performance.latency_p95_ms,1))+" / "+(performance.latency_p99_ms==null?"—":evaluationNumber(performance.latency_p99_ms,1))+" ms";
@@ -2149,24 +2321,44 @@ function renderEvaluationDetail(run,events,results,total){
   $("#evaluationEventsList").innerHTML=events.map(function(item){return '<article class="evaluation-event"><i></i><div><strong>'+esc(readableEvaluationEventMessage(item))+'</strong><small>'+esc(evaluationPhaseLabels[item.phase]||item.phase||"事件")+' · '+esc(fmtTime(item.created_at))+(item.progress==null?"":" · "+esc(item.progress)+"%")+'</small></div></article>';}).join("")||'<p class="muted">暂无阶段事件。</p>';
   $("#evaluationResultCount").textContent=String(total||0)+" 条";
   const scoreSourceLabels={deterministic_rules:"规则",deterministic_rules_pending_review:"规则·待复核",rules_and_independent_judge:"规则+裁判",rules_and_independent_judge_pending_review:"规则+裁判·待复核",rules_judge_and_manual_review:"规则+裁判+人工",mock:"Mock"};
-  $("#evaluationResultsBody").innerHTML=results.map(function(item,index){const metrics=item.metrics||{};const score=item.score||{};const info=evaluationCaseInfo(run,item.case_id,index);const totalTokens=metrics.total_tokens==null?((Number(metrics.input_tokens)||0)+(Number(metrics.output_tokens)||0)):metrics.total_tokens;const reviewStatus=(score.manual_review||{}).status||"not_required";const manual=reviewStatus==="completed";const review=hasPermission("evaluation:manage")&&evaluationTerminal(run)?'<button class="text-button" type="button" data-evaluation-review="'+esc(item.id)+'" data-evaluation-review-name="'+esc(info.name)+'">'+(manual?"重新复核":"复核")+'</button>':(manual?"已复核":reviewStatus==="pending"?"待复核":"无需复核");return '<tr><td><div class="evaluation-result-name"><strong title="'+esc(info.name)+'">'+esc(info.name)+'</strong><small>'+esc(info.description||("第 "+String(index+1)+" 条用例"))+'</small></div></td><td>'+evaluationCaseStatusPill(item.status)+'</td><td>'+esc(totalTokens||"—")+'<small class="table-subline">'+esc(metrics.token_source||"—")+'</small></td><td>'+esc(metrics.ttft_ms==null?"—":evaluationNumber(metrics.ttft_ms,1)+" ms")+'</td><td>'+esc(metrics.latency_ms==null?"—":evaluationNumber(metrics.latency_ms,1)+" ms")+'</td><td><span class="evaluation-result-score">'+esc(score.score==null?"—":evaluationNumber(Number(score.score)*100,1)+"%")+'</span></td><td><span class="evaluation-score-source">'+esc(scoreSourceLabels[score.scoring_source]||score.scoring_source||"规则")+'</span></td><td>'+review+'</td></tr>';}).join("")||'<tr><td class="evaluation-empty-row" colspan="8">当前运行尚无用例级明细；性能阶梯请查看顶部汇总与 CSV。</td></tr>';
+  $("#evaluationResultsBody").innerHTML=results.map(function(item,index){const metrics=item.metrics||{};const score=item.score||{};const resultIndex=((state.listPages.evaluationResults||1)-1)*listPageSize("evaluationResults",8)+index;const info=evaluationCaseInfo(run,item.case_id,resultIndex);const totalTokens=metrics.total_tokens==null?((Number(metrics.input_tokens)||0)+(Number(metrics.output_tokens)||0)):metrics.total_tokens;const reviewStatus=(score.manual_review||{}).status||"not_required";const manual=reviewStatus==="completed";const review=hasPermission("evaluation:manage")&&evaluationTerminal(run)?'<button class="text-button" type="button" data-evaluation-review="'+esc(item.id)+'" data-evaluation-review-name="'+esc(info.name)+'">'+(manual?"重新复核":"复核")+'</button>':(manual?"已复核":reviewStatus==="pending"?"待复核":"无需复核");return '<tr><td><div class="evaluation-result-name"><strong title="'+esc(info.name)+'">'+esc(info.name)+'</strong><small>'+esc(info.description||("第 "+String(resultIndex+1)+" 条用例"))+'</small></div></td><td>'+evaluationCaseStatusPill(item.status)+'</td><td>'+esc(totalTokens||"—")+'<small class="table-subline">'+esc(metrics.token_source||"—")+'</small></td><td>'+esc(!(snapshot.run_kind==="full"?metrics.stream:(snapshot.parameters||snapshot.task_config||{}).stream)||metrics.ttft_ms==null?"—":evaluationNumber(metrics.ttft_ms,1)+" ms")+'</td><td>'+esc(metrics.latency_ms==null?"—":evaluationNumber(metrics.latency_ms,1)+" ms")+'</td><td><span class="evaluation-result-score">'+esc(score.score==null?"—":evaluationNumber(Number(score.score)*100,1)+"%")+'</span></td><td><span class="evaluation-score-source">'+esc(scoreSourceLabels[score.scoring_source]||score.scoring_source||"规则")+'</span></td><td>'+review+'</td></tr>';}).join("")||'<tr><td class="evaluation-empty-row" colspan="8">当前运行尚无用例级明细；性能阶梯请查看顶部汇总与 CSV。</td></tr>';
+}
+function renderEvaluationReportSections(report, intro=false, onlyKey=""){
+  const sections=(report&&(intro?report.intro_sections:report.sections))||[];
+  const keyFor=index=>'evaluationSection_'+(intro?'intro_':'metrics_')+index;
+  if(!onlyKey)$(intro?"#evaluationReportContext":"#evaluationReportSections").innerHTML=sections.map(function(section,index){
+    const key=keyFor(index);
+    return '<section class="evaluation-report-section" id="'+key+'"><header><h4>'+esc(section.title)+'</h4></header><p class="muted">'+esc(section.note||"")+'</p><div class="table-wrap evaluation-full-table paged-scroll" tabindex="0" role="region" aria-label="'+esc(section.title)+'，可滚动查看"><table><thead><tr>'+section.headers.map(cell=>'<th>'+esc(cell)+'</th>').join('')+'</tr></thead><tbody></tbody></table></div><footer class="table-pagination list-pagination" id="'+key+'Pagination" aria-label="'+esc(section.title)+'分页"></footer></section>';
+  }).join('');
+  sections.forEach(function(section,index){
+    const key=keyFor(index);if(onlyKey&&onlyKey!==key)return;
+    const paged=listPage(key,section.rows||[],10,String(report.system_run_id||state.evaluationReportRunId||''));
+    $('#'+key+' tbody').innerHTML=paged.items.map(row=>'<tr>'+row.map(cell=>'<td>'+esc(cell==null?'未采集':cell)+'</td>').join('')+'</tr>').join('')||'<tr><td colspan="'+section.headers.length+'" class="evaluation-empty-row">暂无指标数据</td></tr>';
+    if(onlyKey)resetListScroll(key);
+  });
 }
 function renderEvaluationReport(report){
+  state.evaluationSectionPages=state.evaluationSectionPages||{};
+  renderEvaluationReportSections(report);
+  renderEvaluationReportSections(report,true);
+  $("#generateEvaluationAnalysisButton").disabled=!report||Boolean(state.evaluationAnalysisBusy)||!hasPermission("report:manage");
+  $("#downloadEvaluationEvidenceButton").disabled=!report||report.run_kind!=="full";
   const selected=state.evaluationRuns.find(function(item){return item.id===state.selectedEvaluationRunId;});
   const available=Boolean(report);
   $("#downloadEvaluationReportDocxButton").disabled=!available;$("#downloadEvaluationReportPdfButton").disabled=!available;
   $("#downloadEvaluationSummaryButton").disabled=!selected||!selected.artifact_ref;$("#downloadEvaluationPerformanceButton").disabled=!selected||!selected.artifact_ref;
-  if(!report){state.evaluationReportCasesPage=1;$("#evaluationReportTitle").textContent="选择一条已结束的评测查看报告";$("#evaluationReportMeta").textContent="报告会把指标翻译成可阅读的结论，并说明下一步怎么处理。";const conclusion=$("#evaluationReportConclusion");conclusion.className="evaluation-report-conclusion info";conclusion.innerHTML="<span>结论</span><strong>尚未生成报告</strong><p>请先选择一条已完成、失败或停止的评测任务。</p>";$("#evaluationReportOverview").innerHTML="";$("#evaluationReportMetrics").innerHTML="";$("#evaluationReportFindings").innerHTML='<p class="muted">暂无内容。</p>';$("#evaluationReportRecommendations").innerHTML="";$("#evaluationReportCaseSummary").textContent="暂无用例数据";$("#evaluationReportCasesBody").innerHTML='<tr><td class="evaluation-empty-row" colspan="5">尚未生成报告。</td></tr>';$("#evaluationReportCasesPageSummary").textContent="共 0 条";$("#evaluationReportCasesPageIndicator").textContent="第 1 / 1 页";$("#evaluationReportCasesPrevButton").disabled=true;$("#evaluationReportCasesNextButton").disabled=true;return;}
+  if(!report){state.evaluationReportCasesPage=1;$("#evaluationReportTitle").textContent="选择一条已结束的评测查看报告";$("#evaluationReportMeta").textContent="报告包含测试环境、方法、判定依据、全量结果和模型适用性分析。";const conclusion=$("#evaluationReportConclusion");conclusion.className="evaluation-report-conclusion info";conclusion.innerHTML="<span>结论</span><strong>尚未生成报告</strong><p>请先选择一条已完成、失败或停止的评测任务。</p>";$("#evaluationReportOverview").innerHTML="";$("#evaluationReportMetrics").innerHTML="";$("#evaluationReportFindings").innerHTML='<p class="muted">暂无内容。</p>';$("#evaluationReportRecommendations").innerHTML="";$("#evaluationReportCaseSummary").textContent="暂无用例数据";$("#evaluationReportCasesBody").innerHTML='<tr><td class="evaluation-empty-row" colspan="5">尚未生成报告。</td></tr>';renderListPager("evaluationReportCases",{total:0,page:1,page_size:listPageSize("evaluationReportCases",8)});return;}
   $("#evaluationReportTitle").textContent=report.title+" · "+report.report_number;
   $("#evaluationReportMeta").textContent=report.run_kind_text+" · "+report.model_name+" · 生成于 "+report.generated_at;
-  const conclusion=$("#evaluationReportConclusion");conclusion.className="evaluation-report-conclusion "+esc(report.conclusion.level||"info");conclusion.innerHTML='<span>一句话结论</span><strong>'+esc(report.conclusion.title)+'</strong><p>'+esc(report.conclusion.summary)+'</p>';
+  const conclusion=$("#evaluationReportConclusion");conclusion.className="evaluation-report-conclusion "+esc(report.conclusion.level||"info");conclusion.innerHTML='<span>测试总体结论</span><strong>'+esc(report.conclusion.title)+'</strong><p>'+esc(report.conclusion.summary)+'</p>';
   $("#evaluationReportOverview").innerHTML=[["被测模型",report.model_name],["评测类型",report.run_kind_text],["测试集",report.suite_name+" · v"+report.suite_version],["运行方案",report.plan_text],["任务状态",report.status_text]].map(function(item){return '<div><span>'+esc(item[0])+'</span><strong>'+esc(item[1])+'</strong></div>';}).join("");
   $("#evaluationReportMetrics").innerHTML=(report.metrics||[]).map(function(item){return '<article><span>'+esc(item.assessment)+'</span><strong>'+esc(item.value)+'</strong><h5>'+esc(item.label)+'</h5><p>'+esc(item.explanation)+'</p></article>';}).join("");
   $("#evaluationReportFindings").innerHTML=(report.findings||[]).map(function(item){return '<article class="'+esc(item.level||"info")+'"><i></i><div><strong>'+esc(item.title)+'</strong><p>'+esc(item.detail)+'</p></div></article>';}).join("")||'<p class="muted">暂无内容。</p>';
   $("#evaluationReportRecommendations").innerHTML=(report.recommendations||[]).map(function(item){return '<li>'+esc(item)+'</li>';}).join("");
-  const summary=report.case_summary||{};$("#evaluationReportCaseSummary").textContent="共 "+(summary.total||0)+" 条 · 达标 "+(summary.passed||0)+" · 未达标 "+(summary.failed||0)+" · 执行异常 "+(summary.error||0);
-  const cases=report.cases||[];const total=cases.length;const totalPages=Math.max(1,Math.ceil(total/state.evaluationReportCasesPageSize));state.evaluationReportCasesPage=Math.min(Math.max(1,state.evaluationReportCasesPage),totalPages);const start=(state.evaluationReportCasesPage-1)*state.evaluationReportCasesPageSize;const pageCases=cases.slice(start,start+state.evaluationReportCasesPageSize);const end=Math.min(total,start+pageCases.length);
-  $("#evaluationReportCasesPageSummary").textContent=total?("共 "+total+" 条 · 当前 "+(start+1)+"–"+end+" 条"):"共 0 条";$("#evaluationReportCasesPageIndicator").textContent="第 "+state.evaluationReportCasesPage+" / "+totalPages+" 页";$("#evaluationReportCasesPrevButton").disabled=state.evaluationReportCasesPage<=1;$("#evaluationReportCasesNextButton").disabled=state.evaluationReportCasesPage>=totalPages;
+  const summary=report.case_summary||{};$("#evaluationReportCaseSummary").textContent=report.case_summary_text||("共 "+(summary.total||0)+" 条 · 达标 "+(summary.passed||0)+" · 未达标 "+(summary.failed||0)+" · 执行异常 "+(summary.error||0));
+  state.listPages.evaluationReportCases=state.evaluationReportCasesPage;
+  const paged=listPage("evaluationReportCases",report.cases||[],state.evaluationReportCasesPageSize);
+  state.evaluationReportCasesPage=paged.page;const pageCases=paged.items;
   $("#evaluationReportCasesBody").innerHTML=pageCases.map(function(item){return '<tr><td><strong>'+esc(item.name)+'</strong></td><td>'+esc(item.category)+'</td><td>'+evaluationCaseStatusPill(item.status)+'</td><td>'+esc(item.score==null?"—":evaluationNumber(item.score,1)+"%")+'</td><td>'+esc(item.latency_ms==null?"—":evaluationNumber(item.latency_ms,1)+" ms")+'</td></tr>';}).join("")||'<tr><td class="evaluation-empty-row" colspan="5">当前运行没有用例级明细，请查看报告结论与核心指标。</td></tr>';
 }
 function setEvaluationReportCasesPage(page){const totalPages=Math.max(1,Math.ceil((((state.evaluationReport||{}).cases)||[]).length/state.evaluationReportCasesPageSize));const next=Math.min(Math.max(1,Number(page)||1),totalPages);if(next===state.evaluationReportCasesPage)return;state.evaluationReportCasesPage=next;renderEvaluationReport(state.evaluationReport);}
@@ -2174,31 +2366,42 @@ async function loadEvaluationReport(force){
   const runId=state.selectedEvaluationRunId;const run=state.evaluationRuns.find(function(item){return item.id===runId;});
   if(!runId||!evaluationTerminal(run)){state.evaluationReport=null;state.evaluationReportRunId="";renderEvaluationReport(null);if(runId)toast("任务结束后才能生成最终评测报告",true);return;}
   if(!force&&state.evaluationReport&&state.evaluationReportRunId===runId){renderEvaluationReport(state.evaluationReport);return;}
-  $("#evaluationReportTitle").textContent="正在生成可阅读报告…";$("#evaluationReportMeta").textContent="正在整理结论、指标解释、异常和建议。";
+  $("#evaluationReportTitle").textContent="正在生成模型测试报告…";$("#evaluationReportMeta").textContent="正在整理测试环境、方法、指标结果及评估依据。";
   try{const payload=await api("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/report");if(state.evaluationReportRunId!==runId)state.evaluationReportCasesPage=1;state.evaluationReport=payload.report;state.evaluationReportRunId=runId;renderEvaluationReport(state.evaluationReport);}catch(error){renderEvaluationReport(null);toast("评测报告生成失败："+error.message,true);}
 }
 function openEvaluationReport(runId){if(runId)state.selectedEvaluationRunId=runId;showEvaluationWorkspace("report");loadEvaluationReport(true);}
 async function refreshSelectedEvaluationRun(){
-  const runId=state.selectedEvaluationRunId;if(!runId){renderEvaluationDetail(null,[],[],0);return;}
-  try {const payloads=await Promise.all([api("/api/model-evaluation/runs/"+encodeURIComponent(runId)),api("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/events?limit=1000"),api("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/results?page_size=200")]);const run=payloads[0];state.evaluationEvents=payloads[1].events||[];state.evaluationResults=payloads[2].results||[];const index=state.evaluationRuns.findIndex(function(item){return item.id===run.id;});if(index>=0)state.evaluationRuns[index]=Object.assign({},state.evaluationRuns[index],run);renderEvaluationRuns();renderEvaluationDetail(run,state.evaluationEvents,state.evaluationResults,payloads[2].total||0);}catch(error){toast("评测详情加载失败："+error.message,true);}
+  const size=listPageSize("evaluationResults",8),runId=state.selectedEvaluationRunId;if(!runId){renderListPager("evaluationResults",{total:0,page:1,page_size:size,total_pages:1});renderEvaluationDetail(null,[],[],0);return;}
+  if(state.evaluationResultsRunId!==runId){state.evaluationResultsRunId=runId;state.listPages.evaluationResults=1;}
+  const page=state.listPages.evaluationResults||1,project=state.projectId,request=++state.evaluationDetailRequest;
+  try {const payloads=await Promise.all([api("/api/model-evaluation/runs/"+encodeURIComponent(runId)),api("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/events?limit=1000"),api("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/results?page="+page+"&page_size="+size)]);if(request!==state.evaluationDetailRequest||project!==state.projectId||runId!==state.selectedEvaluationRunId)return;const total=Number(payloads[2].total)||0,totalPages=Math.max(1,Math.ceil(total/size));if(page>totalPages){state.listPages.evaluationResults=totalPages;return refreshSelectedEvaluationRun();}renderListPager("evaluationResults",{total:total,page:page,page_size:size,total_pages:totalPages});const run=payloads[0];state.evaluationEvents=payloads[1].events||[];state.evaluationResults=payloads[2].results||[];const index=state.evaluationRuns.findIndex(function(item){return item.id===run.id;});if(index>=0)state.evaluationRuns[index]=Object.assign({},state.evaluationRuns[index],run);renderEvaluationRuns();renderEvaluationDetail(run,state.evaluationEvents,state.evaluationResults,payloads[2].total||0);}catch(error){if(request!==state.evaluationDetailRequest||project!==state.projectId)return;$("#evaluationResultsPagination").setAttribute("aria-busy","false");toast("评测详情加载失败："+error.message,true);}
 }
 async function loadEvaluationWorkspace(reset){
   try {if(reset||!state.evaluationBootstrap){if(reset)state.evaluationRunsPage=1;state.evaluationBootstrap=await api("/api/model-evaluation/bootstrap");state.evaluationRuns=state.evaluationBootstrap.runs||[];state.evaluationSuites=state.evaluationBootstrap.suites||[];state.evaluationComparisons=state.evaluationBootstrap.comparisons||[];populateEvaluationModels();populateEvaluationSuites();renderEvaluationSuites();renderEvaluationComparison();syncEvaluationForm();}else{const data=await api("/api/model-evaluation/runs?limit=500");state.evaluationRuns=data.runs||[];}if(!state.evaluationRuns.some(function(run){return run.id===state.selectedEvaluationRunId;}))state.selectedEvaluationRunId=(state.evaluationRuns[0]||{}).id||"";renderEvaluationRuns();renderEvaluationComparison();await refreshSelectedEvaluationRun();}catch(error){toast("模型评测加载失败："+error.message,true);}
 }
 async function submitEvaluation(event){
-  event.preventDefault();$("#evaluationFormError").textContent="";const kind=$("#evaluationRunKind").value;const modelId=$("#evaluationModelProfile").value;if(!["mock","mock_full"].includes(kind)&&!modelId){$("#evaluationFormError").textContent="请选择已配置的被测模型";return;}if($("#evaluationJudgeProfile").value&&$("#evaluationJudgeProfile").value===modelId){$("#evaluationFormError").textContent="裁判模型必须独立于被测模型";return;}const button=$("#evaluationSubmitButton");button.disabled=true;button.textContent="正在提交…";try{const run=await api("/api/model-evaluation/runs",{method:"POST",body:{run_kind:kind,plan:$("#evaluationPlan").value,model_profile_id:modelId,suite_version_id:$("#evaluationSuiteVersion").value,judge_model_profile_id:$("#evaluationJudgeProfile").value,server_session_id:$("#evaluationServerSession").value,manual_review_percent:Number($("#evaluationManualReviewPercent").value),stream:$("#evaluationStream").checked,max_tokens:Number($("#evaluationMaxTokens").value),timeout_seconds:Number($("#evaluationTimeout").value)}});state.evaluationRunsPage=1;state.selectedEvaluationRunId=run.id;showEvaluationWorkspace("detail");toast(evaluationRunLabel(run)+"已排队");await loadEvaluationWorkspace(false);}catch(error){$("#evaluationFormError").textContent=error.message;}finally{button.textContent="提交评测任务";syncEvaluationForm();}}
+  if(state.evaluationSubmitting){event.preventDefault();return;}
+  if(event.submitter&&event.submitter.id==="evaluationFullButton"){$("#evaluationRunKind").value="full";$("#evaluationPlan").value="deep";$("#evaluationModelProfile").disabled=false;syncEvaluationForm();}
+  event.preventDefault();$("#evaluationFormError").textContent="";const kind=$("#evaluationRunKind").value;const modelId=$("#evaluationModelProfile").value;if(!["mock","mock_full"].includes(kind)&&!modelId){$("#evaluationFormError").textContent="请选择已配置的被测模型";return;}if($("#evaluationJudgeProfile").value&&$("#evaluationJudgeProfile").value===modelId){$("#evaluationFormError").textContent="裁判模型必须独立于被测模型";return;}const button=$("#evaluationSubmitButton");state.evaluationSubmitting=true;$("#evaluationFullButton").disabled=true;button.disabled=true;button.textContent="正在提交…";try{const run=await api("/api/model-evaluation/runs",{method:"POST",body:{run_kind:kind,plan:$("#evaluationPlan").value,model_profile_id:modelId,suite_version_id:$("#evaluationSuiteVersion").value,judge_model_profile_id:$("#evaluationJudgeProfile").value,server_session_id:$("#evaluationServerSession").value.startsWith("asset:")?"":$("#evaluationServerSession").value,server_profile_id:$("#evaluationServerSession").value.startsWith("asset:")?$("#evaluationServerSession").value.slice(6):"",manual_review_percent:Number($("#evaluationManualReviewPercent").value),stream:$("#evaluationStream").checked,max_tokens:Number($("#evaluationMaxTokens").value),timeout_seconds:Number($("#evaluationTimeout").value)}});state.evaluationRunsPage=1;state.selectedEvaluationRunId=run.id;showEvaluationWorkspace("detail");toast(evaluationRunLabel(run)+"已排队");await loadEvaluationWorkspace(false);}catch(error){$("#evaluationFormError").textContent=error.message;}finally{state.evaluationSubmitting=false;button.textContent="提交评测任务";syncEvaluationForm();}}
 async function stopEvaluationRun(runId){try{await api("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/stop",{method:"POST"});toast("已请求安全停止模型评测");state.selectedEvaluationRunId=runId;await loadEvaluationWorkspace(false);}catch(error){toast("停止评测失败："+error.message,true);}}
 async function deleteEvaluationRun(runId){const run=state.evaluationRuns.find(function(item){return item.id===runId;});if(!run)return;if(!window.confirm("确认删除“"+evaluationRunLabel(run)+"”？\n\n该任务的阶段事件、结果明细和评测产物会一并删除，且无法恢复。"))return;try{await api("/api/model-evaluation/runs/"+encodeURIComponent(runId),{method:"DELETE"});toast(evaluationRunLabel(run)+"已删除");if(state.selectedEvaluationRunId===runId)state.selectedEvaluationRunId="";showEvaluationWorkspace("runs");await loadEvaluationWorkspace(false);}catch(error){toast("删除评测失败："+error.message,true);}}
+async function generateEvaluationAnalysis(){
+  const runId=state.selectedEvaluationRunId,project=state.projectId;if(!runId||state.evaluationAnalysisBusy)return;
+  const button=$("#generateEvaluationAnalysisButton");state.evaluationAnalysisBusy=true;button.disabled=true;button.textContent="正在生成综合分析…";
+  try{const payload=await api("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/report/conclusion?model_profile_id="+encodeURIComponent($("#evaluationReportModel").value),{method:"POST"});if(project!==state.projectId||runId!==state.selectedEvaluationRunId)return;state.evaluationReport=payload.report;state.evaluationReportRunId=runId;renderEvaluationReport(payload.report);toast(payload.report.analysis.message,payload.report.analysis.status!=="completed");}
+  catch(error){toast("综合分析生成失败："+error.message,true);}finally{state.evaluationAnalysisBusy=false;button.textContent="生成 AI 综合分析";button.disabled=!state.evaluationReport||!hasPermission("report:manage");}
+}
 async function downloadEvaluationReport(format){const runId=state.selectedEvaluationRunId;if(!runId){toast("请先选择评测运行",true);return;}try{const response=await fetch("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/report/"+format,{headers:{"X-Project-ID":state.projectId}});if(!response.ok){const data=await response.json();throw new Error(data.detail||"报告下载失败");}const blob=await response.blob();const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download="model_evaluation_report."+format;document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);}catch(error){toast("评测报告下载失败："+error.message,true);}}
-async function downloadEvaluationArtifact(kind){const runId=state.selectedEvaluationRunId;if(!runId){toast("请先选择评测运行",true);return;}try{const response=await fetch("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/artifacts/"+kind,{headers:{"X-Project-ID":state.projectId}});if(!response.ok){const data=await response.json();throw new Error(data.detail||"下载失败");}const blob=await response.blob();const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download=kind==="performance"?"model_evaluation_performance.csv":"model_evaluation_summary.json";document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);}catch(error){toast("下载评测产物失败："+error.message,true);}}
+async function downloadEvaluationArtifact(kind){const runId=state.selectedEvaluationRunId;if(!runId){toast("请先选择评测运行",true);return;}try{const response=await fetch("/api/model-evaluation/runs/"+encodeURIComponent(runId)+"/artifacts/"+kind,{headers:{"X-Project-ID":state.projectId}});if(!response.ok){const data=await response.json();throw new Error(data.detail||"下载失败");}const blob=await response.blob();const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download=kind==="evidence"?"model_evaluation_evidence.zip":kind==="performance"?"model_evaluation_performance.csv":"model_evaluation_summary.json";document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);}catch(error){toast("下载评测产物失败："+error.message,true);}}
 async function loadModels() {
-  try {
-    const data = await api("/api/model-profiles"); state.models = data.profiles || [];
+  try {const data=await api("/api/model-profiles");state.models=data.profiles||[];renderModels();}
+  catch(error){console.warn(error);}
+}
+function renderModels() {
     $("#modelCount").textContent = state.models.length + " 项";
-    $("#modelList").innerHTML = state.models.map(function(model){
+    $("#modelList").innerHTML = listPage("models",state.models,3).items.map(function(model){
       return '<div class="model-item"><div class="model-item-head"><strong>' + esc(model.name) + "</strong>" + (model.is_active?'<span class="status succeeded">已启用</span>':'<span class="status idle">未启用</span>') + '</div><p>' + esc(model.model_name) + "<br>" + esc(model.base_url) + "<br>Key: " + (model.has_api_key?"••••••••":"未配置") + '</p><div class="model-actions"><button data-model-edit="' + model.id + '">编辑</button><button data-model-test="' + model.id + '">连通测试</button>' + (!model.is_active?'<button data-model-activate="'+model.id+'">启用</button>':"") + "</div></div>";
     }).join("") || '<div class="model-empty"><span class="model-empty-icon" aria-hidden="true">＋</span><strong>尚未配置模型</strong><p>保存模型后，可在这里进行编辑、连通测试与启用切换。模型不是任务主流程的必选项。</p></div>';
-  } catch (error) { console.warn(error); }
 }
 async function submitModel(event) {
   event.preventDefault(); $("#modelFormError").textContent="";
@@ -2244,10 +2447,10 @@ async function loadInterfaces() {
     state.interfaceEnvironments=data.environments||[];
     state.interfaceVariables=data.variables||[];
     state.interfaceScenarios=data.scenarios||[];
-    state.interfaceScenarioRuns=data.scenario_runs||[];
     state.selectedInterfaceScenarioIds=state.selectedInterfaceScenarioIds.filter(function(id){return state.interfaceScenarios.some(function(item){return item.id===id;});});
     if(state.selectedInterfaceModuleId && !state.interfaceModules.some(function(item){return item.id===state.selectedInterfaceModuleId;})) state.selectedInterfaceModuleId="";
     renderInterfaceWorkspace();
+    await loadScenarioHistory();
   } catch(error){ console.warn(error);if($("#view-interfaces").classList.contains("active"))toast("接口资产加载失败："+error.message,true); }
 }
 function interfaceCanManage(){return hasPermission("interface:manage");}
@@ -2311,7 +2514,7 @@ function renderInterfaceAssets(){
     return [item.name,item.path,item.description,item.module_name,item.environment_name].some(function(value){return String(value||"").toLowerCase().includes(keyword);});
   });
   $("#interfaceVisibleCount").textContent=assets.length+" 个接口";
-  $("#interfaceBody").innerHTML=assets.map(function(item){
+  $("#interfaceBody").innerHTML=listPage("interfaceAssets",assets,10,JSON.stringify([keyword,environmentId,state.selectedInterfaceModuleId])).items.map(function(item){
     const target=interfaceTargetUrl(item);
     let actions=interfaceCanExecute()?'<button class="text-button interface-debug-action" type="button" data-interface-asset-open="'+esc(item.id)+'">调试</button>':'';
     actions+='<button class="text-button" type="button" data-interface-versions="'+esc(item.id)+'">版本</button>';
@@ -2324,13 +2527,13 @@ function renderInterfaceAssets(){
   }).join("")||'<tr><td colspan="7" class="interface-empty"><div class="interface-catalog-empty"><i aria-hidden="true">HTTP</i><strong>'+(state.interfaces.length?"没有符合筛选条件的接口":"还没有接口")+'</strong><span>'+(state.interfaces.length?"调整模块、环境或搜索条件后再试。":"新建一个 HTTP 接口，维护地址、参数、请求头、请求体与版本。")+'</span>'+(interfaceCanManage()&&!state.interfaces.length?'<button class="button primary" type="button" data-interface-empty-create>＋ 新建第一个接口</button>':'')+'</div></td></tr>';
 }
 function renderInterfaceEnvironments(){
-  $("#interfaceEnvironmentList").innerHTML=state.interfaceEnvironments.map(function(item){
+  $("#interfaceEnvironmentList").innerHTML=listPage("interfaceEnvironments",state.interfaceEnvironments,4).items.map(function(item){
     const actions=interfaceCanManage()?'<span class="interface-row-actions"><button type="button" data-interface-environment-edit="'+esc(item.id)+'">编辑</button><button class="danger-text" type="button" data-interface-environment-delete="'+esc(item.id)+'">删除</button></span>':'';
     return '<article class="interface-environment-card"><div><span class="account-state active"><i></i>'+(item.is_default?'默认环境':'可用环境')+'</span><h4>'+esc(item.name)+'</h4><code>'+esc(item.base_url||"未配置 Base URL")+'</code><p>'+esc(item.description||"暂无环境说明")+'</p></div><dl><div><dt>环境变量</dt><dd>'+Number(item.variable_count||0)+'</dd></div><div><dt>关联接口</dt><dd>'+Number(item.asset_count||0)+'</dd></div></dl>'+actions+'</article>';
   }).join("")||'<div class="interface-empty-state"><strong>尚未配置运行环境</strong><span>创建环境后可集中维护 Base URL 与环境变量。</span></div>';
 }
 function renderInterfaceVariables(){
-  $("#interfaceVariableBody").innerHTML=state.interfaceVariables.map(function(item){
+  $("#interfaceVariableBody").innerHTML=listPage("interfaceVariables",state.interfaceVariables,8).items.map(function(item){
     const actions=interfaceCanManage()?'<span class="interface-table-actions"><button class="text-button" type="button" data-interface-variable-edit="'+esc(item.id)+'">编辑</button><button class="text-button danger-text" type="button" data-interface-variable-delete="'+esc(item.id)+'">删除</button></span>':'';
     const valueState=item.is_secret?(item.has_secret?'密文已保存':'尚未设置'):esc(item.value||"空值");
     return '<tr><td><code>'+esc(item.variable_key)+'</code></td><td>'+esc(item.environment_name||"项目通用")+'</td><td><span class="role-badge '+(item.is_secret?'platform':'standard')+'">'+(item.is_secret?'密钥':'普通变量')+'</span></td><td>'+valueState+'</td><td>'+esc(item.description||"—")+'</td><td>'+actions+'</td></tr>';
@@ -2342,12 +2545,13 @@ function interfaceScenarioStatus(status){
 }
 function renderInterfaceScenarios(){
   const selected=new Set(state.selectedInterfaceScenarioIds);
+  const scenarioPage=listPage("interfaceScenarios",state.interfaceScenarios,8).items;
   $("#interfaceScenarioCount").textContent=state.interfaceScenarios.length;
   $("#interfaceScenarioSelectedCount").textContent=selected.size;
   $("#batchRunInterfaceScenariosButton").disabled=!selected.size||!interfaceCanExecute();
-  $("#interfaceScenarioSelectAll").checked=Boolean(state.interfaceScenarios.length&&selected.size===state.interfaceScenarios.length);
-  $("#interfaceScenarioSelectAll").indeterminate=Boolean(selected.size&&selected.size<state.interfaceScenarios.length);
-  $("#interfaceScenarioBody").innerHTML=state.interfaceScenarios.map(function(item){
+  $("#interfaceScenarioSelectAll").checked=Boolean(scenarioPage.length&&scenarioPage.every(function(item){return selected.has(item.id);}));
+  $("#interfaceScenarioSelectAll").indeterminate=Boolean(scenarioPage.some(function(item){return selected.has(item.id);})&&!scenarioPage.every(function(item){return selected.has(item.id);}));
+  $("#interfaceScenarioBody").innerHTML=scenarioPage.map(function(item){
     let actions=interfaceCanExecute()?'<button class="text-button interface-debug-action" type="button" data-interface-scenario-run="'+esc(item.id)+'">运行</button>':'';
     actions+='<button class="text-button" type="button" data-interface-scenario-history="'+esc(item.id)+'">结果</button>';
     if(interfaceCanManage())actions+='<button class="text-button" type="button" data-interface-scenario-edit="'+esc(item.id)+'">编辑</button><button class="text-button danger-text" type="button" data-interface-scenario-delete="'+esc(item.id)+'">删除</button>';
@@ -2355,7 +2559,7 @@ function renderInterfaceScenarios(){
   }).join("")||'<tr><td colspan="6" class="interface-empty"><div class="interface-catalog-empty"><i>FLOW</i><strong>还没有接口场景</strong><span>创建场景后即可编排接口步骤、提取变量、配置断言并生成执行报告。</span>'+(interfaceCanManage()?'<button class="button primary" type="button" data-interface-scenario-empty-create>＋ 新建第一个场景</button>':'')+'</div></td></tr>';
 }
 function renderInterfaceScenarioRuns(){
-  $("#interfaceScenarioRunCount").textContent=state.interfaceScenarioRuns.length+" 条";
+  $("#interfaceScenarioRunCount").textContent=String((state.listMeta.interfaceScenarioRuns||{}).total||0)+" 条";
   $("#interfaceScenarioRunBody").innerHTML=state.interfaceScenarioRuns.map(function(run){
     const summary=run.summary||{};
     const reports=(run.docx_path?'<a class="text-button" href="/api/interface-scenario-runs/'+encodeURIComponent(run.id)+'/download/docx">DOCX</a>':'')+(run.pdf_path?'<a class="text-button" href="/api/interface-scenario-runs/'+encodeURIComponent(run.id)+'/download/pdf">PDF</a>':'');
@@ -2412,9 +2616,10 @@ async function saveInterfaceScenario(runAfter){
 async function submitInterfaceScenario(event){event.preventDefault();await saveInterfaceScenario(false);}
 async function deleteInterfaceScenario(id){if(!window.confirm("确认删除这个接口场景？历史执行记录和报告仍会保留。"))return;try{await api("/api/interface-scenarios/"+encodeURIComponent(id),{method:"DELETE"});toast("接口场景已删除");await loadInterfaces();}catch(error){toast("场景删除失败："+error.message,true);}}
 function renderInterfaceScenarioRunDetail(run){
+  state.interfaceScenarioDetail=run;
   const result=run.result||{},summary=run.summary||{},steps=result.steps||[],statusLabels={queued:"排队中",running:"执行中",succeeded:"通过",failed:"未通过",interrupted:"已停止"};$("#interfaceScenarioRunTitle").textContent=(run.scenario_name||((result.scenario||{}).name)||"接口场景")+" · "+(statusLabels[run.status]||run.status||"未知状态");
   const reports=(run.docx_path?'<a class="button secondary" href="/api/interface-scenario-runs/'+encodeURIComponent(run.id)+'/download/docx">下载 DOCX</a>':'')+(run.pdf_path?'<a class="button secondary" href="/api/interface-scenario-runs/'+encodeURIComponent(run.id)+'/download/pdf">下载 PDF</a>':'');
-  $("#interfaceScenarioRunDetail").innerHTML='<div class="interface-scenario-result-summary"><article><span>最终结果</span>'+interfaceScenarioStatus(run.status)+'</article><article><span>通过步骤</span><strong>'+Number(summary.passed_steps||0)+' / '+Number(summary.total_steps||0)+'</strong></article><article><span>失败 / 跳过</span><strong>'+Number(summary.failed_steps||0)+' / '+Number(summary.skipped_steps||0)+'</strong></article><article><span>总耗时</span><strong>'+Number(summary.elapsed_ms||0).toFixed(1)+' ms</strong></article></div>'+(result.error?'<div class="interface-form-error">'+esc(result.error)+'</div>':'')+'<div class="interface-scenario-result-steps">'+steps.map(function(step){const response=((step.exchange||{}).response)||{};const extracts=(step.extractions||[]).map(function(item){return '<li class="'+(item.success?'passed':'failed')+'"><b>'+(item.success?'通过':'失败')+'</b><span>'+esc(item.name||"")+' · '+esc(item.value||item.message||"—")+'</span></li>';}).join("");const assertions=(step.assertions||[]).map(function(item){return '<li class="'+(item.passed?'passed':'failed')+'"><b>'+(item.passed?'通过':'失败')+'</b><span>'+esc(item.source||"")+' '+esc(item.expression||"")+' · 期望 '+esc(typeof item.expected==="string"?item.expected:JSON.stringify(item.expected))+' · 实际 '+esc(typeof item.actual==="string"?item.actual:JSON.stringify(item.actual))+'</span></li>';}).join("");return '<article class="interface-scenario-result-step '+esc(step.status||"")+'"><header><span>'+Number(step.index||0)+'</span><div><strong>'+esc(step.name||"未命名步骤")+'</strong><small>'+esc(((step.asset||{}).method)||"")+' '+esc(((step.asset||{}).path)||"")+'</small></div>'+interfaceScenarioStatus(step.status)+'</header><div class="interface-scenario-result-meta"><span>HTTP '+esc(response.status_code==null?"—":response.status_code)+'</span><span>'+Number(step.elapsed_ms||0).toFixed(1)+' ms</span><span>接口 v'+Number(((step.asset||{}).version)||1)+'</span></div>'+(step.message?'<p class="interface-scenario-result-error">'+esc(step.message)+'</p>':'')+(extracts?'<section><h5>变量提取</h5><ul>'+extracts+'</ul></section>':'')+(assertions?'<section><h5>断言结果</h5><ul>'+assertions+'</ul></section>':'')+(response.body!=null?'<details><summary>查看响应摘要</summary><pre>'+esc(prettyInterfaceResponseBody(response.body,response.content_type))+'</pre></details>':'')+'</article>';}).join("")+'</div><div class="interface-scenario-report-actions">'+(!interfaceScenarioTerminal(run.status)?'<button class="button danger" type="button" data-interface-scenario-run-stop="'+esc(run.id)+'">停止执行</button>':'')+reports+'</div>';openInterfaceDialog("interfaceScenarioRunDialog");
+  $("#interfaceScenarioRunDetail").innerHTML='<div class="interface-scenario-result-summary"><article><span>最终结果</span>'+interfaceScenarioStatus(run.status)+'</article><article><span>通过步骤</span><strong>'+Number(summary.passed_steps||0)+' / '+Number(summary.total_steps||0)+'</strong></article><article><span>失败 / 跳过</span><strong>'+Number(summary.failed_steps||0)+' / '+Number(summary.skipped_steps||0)+'</strong></article><article><span>总耗时</span><strong>'+Number(summary.elapsed_ms||0).toFixed(1)+' ms</strong></article></div>'+(result.error?'<div class="interface-form-error">'+esc(result.error)+'</div>':'')+'<div class="interface-scenario-result-steps">'+listPage('scenarioSteps',steps,5,run.id).items.map(function(step){const response=((step.exchange||{}).response)||{};const extracts=(step.extractions||[]).map(function(item){return '<li class="'+(item.success?'passed':'failed')+'"><b>'+(item.success?'通过':'失败')+'</b><span>'+esc(item.name||"")+' · '+esc(item.value||item.message||"—")+'</span></li>';}).join("");const assertions=(step.assertions||[]).map(function(item){return '<li class="'+(item.passed?'passed':'failed')+'"><b>'+(item.passed?'通过':'失败')+'</b><span>'+esc(item.source||"")+' '+esc(item.expression||"")+' · 期望 '+esc(typeof item.expected==="string"?item.expected:JSON.stringify(item.expected))+' · 实际 '+esc(typeof item.actual==="string"?item.actual:JSON.stringify(item.actual))+'</span></li>';}).join("");return '<article class="interface-scenario-result-step '+esc(step.status||"")+'"><header><span>'+Number(step.index||0)+'</span><div><strong>'+esc(step.name||"未命名步骤")+'</strong><small>'+esc(((step.asset||{}).method)||"")+' '+esc(((step.asset||{}).path)||"")+'</small></div>'+interfaceScenarioStatus(step.status)+'</header><div class="interface-scenario-result-meta"><span>HTTP '+esc(response.status_code==null?"—":response.status_code)+'</span><span>'+Number(step.elapsed_ms||0).toFixed(1)+' ms</span><span>接口 v'+Number(((step.asset||{}).version)||1)+'</span></div>'+(step.message?'<p class="interface-scenario-result-error">'+esc(step.message)+'</p>':'')+(extracts?'<section><h5>变量提取</h5><ul>'+extracts+'</ul></section>':'')+(assertions?'<section><h5>断言结果</h5><ul>'+assertions+'</ul></section>':'')+(response.body!=null?'<details><summary>查看响应摘要</summary><pre>'+esc(prettyInterfaceResponseBody(response.body,response.content_type))+'</pre></details>':'')+'</article>';}).join("")+'</div><div class="interface-scenario-report-actions">'+(!interfaceScenarioTerminal(run.status)?'<button class="button danger" type="button" data-interface-scenario-run-stop="'+esc(run.id)+'">停止执行</button>':'')+reports+'</div>';openInterfaceDialog("interfaceScenarioRunDialog");
 }
 async function showInterfaceScenarioRun(id){$("#interfaceScenarioRunTitle").textContent="正在加载执行结果…";$("#interfaceScenarioRunDetail").innerHTML='<div class="interface-empty-state"><span>正在读取场景快照与步骤结果…</span></div>';openInterfaceDialog("interfaceScenarioRunDialog");try{const run=await api("/api/interface-scenario-runs/"+encodeURIComponent(id));renderInterfaceScenarioRunDetail(run);}catch(error){$("#interfaceScenarioRunDetail").innerHTML='<div class="interface-form-error">'+esc(error.message)+'</div>';}}
 async function stopInterfaceScenarioRun(id){try{const run=await api("/api/interface-scenario-runs/"+encodeURIComponent(id)+"/stop",{method:"POST"});renderInterfaceScenarioRunDetail(run);toast(run.status==="interrupted"?"已停止排队任务":"已发送停止请求");}catch(error){toast("停止失败："+error.message,true);}}
@@ -2591,8 +2796,15 @@ async function sendInterfaceDebugRequest(){
 async function publishInterfaceAsset(id){try{const item=await api("/api/interface-assets/"+encodeURIComponent(id)+"/publish",{method:"POST"});toast("已发布 "+item.name+" v"+item.current_version);await loadInterfaces();}catch(error){toast("接口发布失败："+error.message,true);}}
 async function deleteInterfaceAsset(id){if(!window.confirm("确认删除这个接口及全部历史版本？"))return;try{await api("/api/interface-assets/"+encodeURIComponent(id),{method:"DELETE"});toast("接口资产已删除");await loadInterfaces();}catch(error){toast("接口删除失败："+error.message,true);}}
 async function showInterfaceVersions(id){
-  const asset=state.interfaces.find(function(item){return item.id===id;});$("#interfaceVersionsTitle").textContent=(asset?asset.name:"")+" · 版本历史";$("#interfaceVersionList").innerHTML='<div class="interface-empty-state"><span>正在加载版本…</span></div>';openInterfaceDialog("interfaceVersionsDialog");
-  try{const data=await api("/api/interface-assets/"+encodeURIComponent(id)+"/versions");$("#interfaceVersionList").innerHTML=(data.versions||[]).map(function(version){const definition=version.definition||{};return '<article><div><span>v'+Number(version.version)+'</span>'+statusPill(version.status)+'<time>'+esc(fmtTime(version.created_at))+'</time></div><dl><div><dt>请求</dt><dd><span class="step-chip">'+esc(definition.method||"GET")+'</span> <code>'+esc(definition.path||"/")+'</code></dd></div><div><dt>环境</dt><dd>'+esc((state.interfaceEnvironments.find(function(item){return item.id===definition.environment_id;})||{}).name||"未绑定")+'</dd></div><div><dt>说明</dt><dd>'+esc(definition.description||"—")+'</dd></div></dl></article>';}).join("")||'<div class="interface-empty-state"><span>暂无版本记录</span></div>';}catch(error){$("#interfaceVersionList").innerHTML='<div class="interface-empty-state"><span>'+esc(error.message)+'</span></div>';}
+  const asset=state.interfaces.find(function(item){return item.id===id;});
+  state.interfaceVersionAssetId=id;state.listPages.interfaceVersions=1;
+  $("#interfaceVersionsTitle").textContent=(asset?asset.name:"")+" · 版本历史";
+  $("#interfaceVersionList").innerHTML='<div class="interface-empty-state"><span>正在加载版本…</span></div>';openInterfaceDialog("interfaceVersionsDialog");
+  try{const data=await api("/api/interface-assets/"+encodeURIComponent(id)+"/versions");if(state.interfaceVersionAssetId!==id)return;state.interfaceVersions=data.versions||[];renderInterfaceVersions();}
+  catch(error){$("#interfaceVersionList").innerHTML='<div class="interface-empty-state"><span>'+esc(error.message)+'</span></div>';}
+}
+function renderInterfaceVersions(){
+$("#interfaceVersionList").innerHTML=listPage("interfaceVersions",state.interfaceVersions,5,state.interfaceVersionAssetId).items.map(function(version){const definition=version.definition||{};return '<article><div><span>v'+Number(version.version)+'</span>'+statusPill(version.status)+'<time>'+esc(fmtTime(version.created_at))+'</time></div><dl><div><dt>请求</dt><dd><span class="step-chip">'+esc(definition.method||"GET")+'</span> <code>'+esc(definition.path||"/")+'</code></dd></div><div><dt>环境</dt><dd>'+esc((state.interfaceEnvironments.find(function(item){return item.id===definition.environment_id;})||{}).name||"未绑定")+'</dd></div><div><dt>说明</dt><dd>'+esc(definition.description||"—")+'</dd></div></dl></article>';}).join("")||'<div class="interface-empty-state"><span>暂无版本记录</span></div>';
 }
 async function submitInterface(event) {
   event.preventDefault();
@@ -2609,21 +2821,13 @@ async function loadIdentityMembers(projectId) {
 function renderIdentityMembers() {
   const roleNames={viewer:"只读成员",tester:"测试执行者",project_admin:"项目管理员"};
   $("#identityMemberCount").textContent=state.identityMembers.length+" 人";
-  $("#identityMembersBody").innerHTML=state.identityMembers.map(function(member){
+  $("#identityMembersBody").innerHTML=listPage("identityMembers",state.identityMembers,8,$("#membershipProjectSelect").value).items.map(function(member){
     return '<tr><td><strong>'+esc(member.display_name)+'</strong><small class="table-subline">'+esc(member.username)+'</small></td><td><span class="role-badge '+esc(member.role)+'">'+esc(roleNames[member.role] || member.role)+'</span></td><td><span class="account-state '+(member.is_active?"active":"disabled")+'"><i></i>'+(member.is_active?"正常":"已停用")+'</span></td><td><button class="text-button danger-text" data-member-remove="'+esc(member.user_id)+'">移除</button></td></tr>';
   }).join("") || '<tr><td colspan="4">当前项目尚未配置成员</td></tr>';
 }
 function identityPage(items,pageKey) {
-  const total=items.length,totalPages=Math.max(1,Math.ceil(total/state.identityPageSize));
-  state[pageKey]=Math.min(Math.max(1,Number(state[pageKey] || 1)),totalPages);
-  const start=(state[pageKey]-1)*state.identityPageSize;
-  return {items:items.slice(start,start+state.identityPageSize),total:total,totalPages:totalPages,page:state[pageKey],start:total?start+1:0,end:Math.min(total,start+state.identityPageSize)};
-}
-function renderIdentityPager(prefix,pageInfo) {
-  $("#"+prefix+"PageSummary").textContent=pageInfo.total?"共 "+pageInfo.total+" 条 · 当前 "+pageInfo.start+"–"+pageInfo.end+" 条":"共 0 条";
-  $("#"+prefix+"PageIndicator").textContent="第 "+pageInfo.page+" / "+pageInfo.totalPages+" 页";
-  $("#"+prefix+"PrevButton").disabled=pageInfo.page<=1;
-  $("#"+prefix+"NextButton").disabled=pageInfo.page>=pageInfo.totalPages;
+  const key=pageKey.slice(0,-4);state.listPages[key]=state[pageKey];
+  const page=listPage(key,items,10);state[pageKey]=page.page;return page;
 }
 function renderIdentityUsers() {
   const keyword=$("#identityUserSearch").value.trim().toLowerCase(),role=$("#identityUserRoleFilter").value,status=$("#identityUserStatusFilter").value;
@@ -2638,7 +2842,6 @@ function renderIdentityUsers() {
     const self=state.identity && state.identity.user && state.identity.user.id===user.id;
     return '<tr><td><strong>'+esc(user.display_name)+'</strong><small class="table-subline">'+esc(user.username)+(self?" · 当前账号":"")+'</small></td><td><span class="role-badge '+(user.is_superuser?"platform":"standard")+'">'+(user.is_superuser?"平台管理员":"普通用户")+'</span></td><td><span class="account-state '+(user.is_active?"active":"disabled")+'"><i></i>'+(user.is_active?"正常":"已停用")+'</span></td><td>'+esc(fmtTime(user.last_login_at))+'</td><td>'+esc(fmtTime(user.created_at))+'</td><td><div class="identity-row-actions"><button class="text-button" data-user-edit="'+esc(user.id)+'">编辑</button><button class="text-button '+(user.is_active?"danger-text":"")+'" data-user-toggle="'+esc(user.id)+'" data-next-active="'+(user.is_active?"false":"true")+'">'+(user.is_active?"停用":"启用")+'</button></div></td></tr>';
   }).join("") || '<tr><td colspan="6">没有符合条件的平台用户</td></tr>';
-  renderIdentityPager("identityUsers",page);
 }
 function renderIdentityProjects() {
   const keyword=$("#identityProjectSearch").value.trim().toLowerCase(),status=$("#identityProjectStatusFilter").value;
@@ -2652,7 +2855,6 @@ function renderIdentityProjects() {
     const current=project.id===state.projectId;
     return '<tr><td><strong>'+esc(project.name)+'</strong><small class="table-subline">'+esc(project.description||"未填写项目说明")+(current?" · 当前项目":"")+'</small></td><td><code>'+esc(project.project_key)+'</code></td><td><span class="account-state '+(project.is_active?"active":"disabled")+'"><i></i>'+(project.is_active?"正常":"已停用")+'</span></td><td>'+esc(fmtTime(project.updated_at))+'</td><td>'+esc(fmtTime(project.created_at))+'</td><td><div class="identity-row-actions"><button class="text-button" data-project-members="'+esc(project.id)+'">成员管理</button><button class="text-button" data-project-edit="'+esc(project.id)+'">编辑</button></div></td></tr>';
   }).join("") || '<tr><td colspan="6">没有符合条件的项目空间</td></tr>';
-  renderIdentityPager("identityProjects",page);
 }
 function renderIdentityRoles() {
   const permissionLabels={"project:view":"查看项目","test:execute":"执行测试","report:manage":"管理报告","server:operate":"操作服务器","project:members":"管理成员","interface:manage":"管理接口","evaluation:view":"查看评测","evaluation:manage":"管理评测","evaluation:operate":"执行评测"};
@@ -2661,7 +2863,6 @@ function renderIdentityRoles() {
   const filtered=state.identityRoles.filter(function(role){return !keyword||(String(role.label||"")+" "+String(role.key||"")+" "+(role.permissions||[]).join(" ")).toLowerCase().includes(keyword);});
   const page=identityPage(filtered,"identityRolesPage");
   $("#identityRoleMatrix").innerHTML=page.items.map(function(role){return '<tr><td><strong>'+esc(role.label)+'</strong></td><td><code>'+esc(role.key)+'</code></td><td><div class="identity-permission-list">'+role.permissions.map(function(permission){return '<span>'+esc(permissionLabels[permission]||permission)+'</span>';}).join("")+'</div></td><td><span class="identity-role-boundary">'+esc(roleBoundaries[role.key]||"按平台固定权限执行")+'</span></td></tr>';}).join("") || '<tr><td colspan="4">没有符合条件的固定角色</td></tr>';
-  renderIdentityPager("identityRoles",page);
 }
 function renderIdentityAdmin() {
   const users=state.identityUsers,projects=state.identityProjects;
@@ -2681,27 +2882,27 @@ function applyIdentityAuditData(data) {
 }
 function renderIdentityAudit() {
   $("#identityAuditBody").innerHTML=state.identityAudit.map(function(event){return '<tr><td>'+esc(fmtTime(event.created_at))+'</td><td>'+esc(event.actor_username || "系统 / 未认证")+'</td><td>'+esc(event.project_name || "—")+'</td><td><code>'+esc(event.action)+'</code></td><td><span class="audit-outcome '+esc(event.outcome)+'">'+(event.outcome==="success"?"成功":event.outcome==="denied"?"拒绝":"失败")+'</span></td><td>'+esc(event.target_type?event.target_type+" · "+shortId(event.target_id):"—")+'</td></tr>';}).join("") || '<tr><td colspan="6">暂无审计记录</td></tr>';
-  const start=state.identityAuditTotal ? (state.identityAuditPage-1)*state.identityAuditPageSize+1 : 0;
-  const end=Math.min(state.identityAuditTotal,state.identityAuditPage*state.identityAuditPageSize);
-  $("#identityAuditPageSummary").textContent=state.identityAuditTotal ? "共 "+state.identityAuditTotal+" 条 · 当前 "+start+"–"+end+" 条" : "共 0 条";
-  $("#identityAuditPageIndicator").textContent="第 "+state.identityAuditPage+" / "+state.identityAuditTotalPages+" 页";
-  $("#identityAuditPrevButton").disabled=state.identityAuditPage<=1;
-  $("#identityAuditNextButton").disabled=state.identityAuditPage>=state.identityAuditTotalPages;
+  renderListPager("identityAudit",{total:state.identityAuditTotal,page:state.identityAuditPage,page_size:state.identityAuditPageSize,total_pages:state.identityAuditTotalPages});
 }
 async function loadIdentityAudit(page) {
   if(!state.identity || !state.identity.user || !state.identity.user.is_superuser)return;
-  const requested=Math.max(1,Number(page || state.identityAuditPage || 1));
+  const requested=Math.max(1,Number(page || state.identityAuditPage || 1)),size=listPageSize("identityAudit",20);
+  const request={};state.historyRequests.identityAudit=request;
+  const project=state.projectId,user=state.identity.user.id;
+  const current=()=>state.historyRequests.identityAudit===request&&project===state.projectId&&user===(state.identity&&state.identity.user||{}).id;
   try {
-    const data=await api("/api/identity/audit-events?page="+requested+"&page_size="+state.identityAuditPageSize);
-    applyIdentityAuditData(data);renderIdentityAudit();
-  } catch(error){toast("审计记录加载失败："+error.message,true);}
+    const data=await api("/api/identity/audit-events?page="+requested+"&page_size="+size);
+    if(!current())return;applyIdentityAuditData(data);renderIdentityAudit();
+  } catch(error){if(current())toast("审计记录加载失败："+error.message,true);}
 }
 async function loadIdentityData(auditPage) {
   if(!state.identity || !state.identity.user || !state.identity.user.is_superuser)return;
   try {
     const page=Math.max(1,Number(auditPage || state.identityAuditPage || 1));
-    const results=await Promise.all([api("/api/identity/users"),api("/api/identity/projects"),api("/api/identity/roles"),api("/api/identity/audit-events?page="+page+"&page_size="+state.identityAuditPageSize)]);
-    state.identityUsers=results[0].users || [];state.identityProjects=results[1].projects || [];state.identityRoles=results[2].roles || [];applyIdentityAuditData(results[3]);
+    const request={};state.historyRequests.identityData=request;const project=state.projectId,user=state.identity.user.id;
+    const results=await Promise.all([api("/api/identity/users"),api("/api/identity/projects"),api("/api/identity/roles"),loadIdentityAudit(page)]);
+    if(state.historyRequests.identityData!==request||project!==state.projectId||user!==(state.identity&&state.identity.user||{}).id)return;
+    state.identityUsers=results[0].users || [];state.identityProjects=results[1].projects || [];state.identityRoles=results[2].roles || [];
     const signedInUser=state.identityUsers.find(function(user){return user.id===state.identity.user.id;});
     if(signedInUser)state.identity.user=Object.assign({},state.identity.user,signedInUser);
     state.identity.projects=(state.identity.projects||[]).map(function(project){return state.identityProjects.find(function(fresh){return fresh.id===project.id;})||project;});
@@ -2832,6 +3033,9 @@ function bind() {
     const evaluationStop=event.target.closest("[data-evaluation-stop]");if(evaluationStop)stopEvaluationRun(evaluationStop.dataset.evaluationStop);
     const evaluationDelete=event.target.closest("[data-evaluation-delete]");if(evaluationDelete)deleteEvaluationRun(evaluationDelete.dataset.evaluationDelete);
     const evaluationClone=event.target.closest("[data-evaluation-suite-clone]");if(evaluationClone)cloneEvaluationSuite(evaluationClone.dataset.evaluationSuiteClone);
+    const evaluationSuiteOpen=event.target.closest("[data-evaluation-suite-detail]");if(evaluationSuiteOpen)openEvaluationSuiteDrawer(evaluationSuiteOpen.dataset.evaluationSuiteDetail,evaluationSuiteOpen);
+    if(event.target.closest("#closeEvaluationSuiteDrawer"))closeEvaluationSuiteDrawer();
+    if(event.target.closest("[data-evaluation-suite-retry]"))loadEvaluationSuiteCases();
     const evaluationImport=event.target.closest("[data-evaluation-suite-import]");if(evaluationImport)importEvaluationSuite(evaluationImport.dataset.evaluationSuiteImport,evaluationImport);
     const evaluationReview=event.target.closest("[data-evaluation-review]");if(evaluationReview)openEvaluationReview(evaluationReview.dataset.evaluationReview,evaluationReview.dataset.evaluationReviewName);
     const evaluationReviewClose=event.target.closest("[data-evaluation-review-close]");if(evaluationReviewClose)closeEvaluationReview();
@@ -2889,7 +3093,7 @@ function bind() {
     const comparisonRun=event.target.closest("[data-evaluation-comparison-run]");if(comparisonRun){const id=comparisonRun.dataset.evaluationComparisonRun;state.selectedEvaluationComparisonRunIds=comparisonRun.checked?Array.from(new Set(state.selectedEvaluationComparisonRunIds.concat(id))):state.selectedEvaluationComparisonRunIds.filter(function(item){return item!==id;});state.evaluationComparisonResult=null;renderEvaluationComparison();}
     if(event.target.matches("#evaluationSuiteVersion"))syncEvaluationForm();
     const selected=event.target.closest("[data-interface-scenario-select]");if(selected){const id=selected.dataset.interfaceScenarioSelect;state.selectedInterfaceScenarioIds=selected.checked?Array.from(new Set(state.selectedInterfaceScenarioIds.concat(id))):state.selectedInterfaceScenarioIds.filter(function(item){return item!==id;});renderInterfaceScenarios();}
-    if(event.target.matches("#interfaceScenarioSelectAll")){state.selectedInterfaceScenarioIds=event.target.checked?state.interfaceScenarios.map(function(item){return item.id;}):[];renderInterfaceScenarios();}
+    if(event.target.matches("#interfaceScenarioSelectAll")){const ids=listPage("interfaceScenarios",state.interfaceScenarios,8).items.map(function(item){return item.id;});const selected=new Set(state.selectedInterfaceScenarioIds);ids.forEach(function(id){if(event.target.checked)selected.add(id);else selected.delete(id);});state.selectedInterfaceScenarioIds=Array.from(selected);renderInterfaceScenarios();}
     if(event.target.matches("[data-scenario-step-asset]")){const card=event.target.closest("[data-interface-scenario-step]");const asset=state.interfaces.find(function(item){return item.id===event.target.value;});const name=card&&card.querySelector("[data-scenario-step-name]");if(name&&!name.value.trim()&&asset)name.value=asset.name;const title=card&&card.querySelector("header strong");if(title)title.textContent=name.value.trim()||(asset&&asset.name)||"未命名步骤";}
     if(event.target.matches("[data-scenario-step-name]")){const card=event.target.closest("[data-interface-scenario-step]");const title=card&&card.querySelector("header strong");if(title)title.textContent=event.target.value.trim()||"未命名步骤";}
   });
@@ -2942,18 +3146,16 @@ function bind() {
   $("#evaluationJudgeProfile").addEventListener("change",syncEvaluationForm);
   $("#evaluationMaxTokens").addEventListener("input",syncEvaluationForm);
   $("#refreshEvaluationButton").addEventListener("click",function(){loadEvaluationWorkspace(false);});
-  $("#evaluationRunsPrevButton").addEventListener("click",function(){setEvaluationRunsPage(state.evaluationRunsPage-1);});
-  $("#evaluationRunsNextButton").addEventListener("click",function(){setEvaluationRunsPage(state.evaluationRunsPage+1);});
-  $("#evaluationReportCasesPrevButton").addEventListener("click",function(){setEvaluationReportCasesPage(state.evaluationReportCasesPage-1);});
-  $("#evaluationReportCasesNextButton").addEventListener("click",function(){setEvaluationReportCasesPage(state.evaluationReportCasesPage+1);});
   $("#refreshEvaluationSuitesButton").addEventListener("click",refreshEvaluationSuites);
   $("#createEvaluationComparisonButton").addEventListener("click",function(){createEvaluationComparison(false);});
   $("#stopEvaluationButton").addEventListener("click",function(){if(state.selectedEvaluationRunId)stopEvaluationRun(state.selectedEvaluationRunId);});
   $("#deleteEvaluationButton").addEventListener("click",function(){if(state.selectedEvaluationRunId)deleteEvaluationRun(state.selectedEvaluationRunId);});
   $("#openEvaluationReportButton").addEventListener("click",function(){openEvaluationReport(state.selectedEvaluationRunId);});
+  $("#generateEvaluationAnalysisButton").addEventListener("click",generateEvaluationAnalysis);
   $("#downloadEvaluationReportDocxButton").addEventListener("click",function(){downloadEvaluationReport("docx");});
   $("#downloadEvaluationReportPdfButton").addEventListener("click",function(){downloadEvaluationReport("pdf");});
   $("#downloadEvaluationSummaryButton").addEventListener("click",function(){downloadEvaluationArtifact("summary");});
+  $("#downloadEvaluationEvidenceButton").addEventListener("click",function(){downloadEvaluationArtifact("evidence");});
   $("#downloadEvaluationPerformanceButton").addEventListener("click",function(){downloadEvaluationArtifact("performance");});
   $("#interfaceForm").addEventListener("submit",submitInterface);
   $("#refreshInterfacesButton").addEventListener("click",loadInterfaces);
@@ -2989,30 +3191,41 @@ function bind() {
   $("#membershipForm").addEventListener("submit",saveMembership);
   $("#membershipProjectSelect").addEventListener("change",function(){loadIdentityMembers(this.value);});
   $("#refreshAuditButton").addEventListener("click",function(){loadIdentityAudit(1);});
-  $("#identityAuditPrevButton").addEventListener("click",function(){loadIdentityAudit(state.identityAuditPage-1);});
-  $("#identityAuditNextButton").addEventListener("click",function(){loadIdentityAudit(state.identityAuditPage+1);});
   $("#identityUserSearch").addEventListener("input",function(){state.identityUsersPage=1;renderIdentityUsers();});
   $("#identityUserRoleFilter").addEventListener("change",function(){state.identityUsersPage=1;renderIdentityUsers();});
   $("#identityUserStatusFilter").addEventListener("change",function(){state.identityUsersPage=1;renderIdentityUsers();});
   $("#resetIdentityUserFilters").addEventListener("click",function(){$("#identityUserSearch").value="";$("#identityUserRoleFilter").value="all";$("#identityUserStatusFilter").value="all";state.identityUsersPage=1;renderIdentityUsers();});
-  $("#identityUsersPrevButton").addEventListener("click",function(){state.identityUsersPage-=1;renderIdentityUsers();});
-  $("#identityUsersNextButton").addEventListener("click",function(){state.identityUsersPage+=1;renderIdentityUsers();});
   $("#identityProjectSearch").addEventListener("input",function(){state.identityProjectsPage=1;renderIdentityProjects();});
   $("#identityProjectStatusFilter").addEventListener("change",function(){state.identityProjectsPage=1;renderIdentityProjects();});
   $("#resetIdentityProjectFilters").addEventListener("click",function(){$("#identityProjectSearch").value="";$("#identityProjectStatusFilter").value="all";state.identityProjectsPage=1;renderIdentityProjects();});
-  $("#identityProjectsPrevButton").addEventListener("click",function(){state.identityProjectsPage-=1;renderIdentityProjects();});
-  $("#identityProjectsNextButton").addEventListener("click",function(){state.identityProjectsPage+=1;renderIdentityProjects();});
   $("#identityRoleSearch").addEventListener("input",function(){state.identityRolesPage=1;renderIdentityRoles();});
   $("#resetIdentityRoleFilters").addEventListener("click",function(){$("#identityRoleSearch").value="";state.identityRolesPage=1;renderIdentityRoles();});
-  $("#identityRolesPrevButton").addEventListener("click",function(){state.identityRolesPage-=1;renderIdentityRoles();});
-  $("#identityRolesNextButton").addEventListener("click",function(){state.identityRolesPage+=1;renderIdentityRoles();});
   document.addEventListener("keydown",function(event){if(event.key==="Escape"){closeServerProfileDrawer();closeGpuDetailDrawer();["interfaceModuleDialog","currentProjectDialog","interfaceEnvironmentDialog","interfaceVariableDialog","interfaceVersionsDialog","interfaceScenarioRunDialog"].forEach(closeInterfaceDialog);["identityUserDrawer","identityProjectDrawer","identityMembershipDrawer"].forEach(closeIdentityDrawer);}});
   window.addEventListener("resize",function(){const run=state.runs.find(function(x){return x.id===state.monitorRunId;});if(run)renderMonitor(run);const session=state.serverSessions.find(function(x){return x.id===state.serverSessionId;});if(session)renderServerSessionMetrics(session);});
 }
 document.addEventListener("DOMContentLoaded",function(){
+  $("#evaluationSuiteDrawer").addEventListener("close",function(){
+    if(this.open)return;
+    evaluationSuiteRequest++;evaluationSuiteDetail=null;
+    if(evaluationSuiteReturnFocus&&evaluationSuiteReturnFocus.isConnected)evaluationSuiteReturnFocus.focus();
+    evaluationSuiteReturnFocus=null;
+  });
+  document.addEventListener("click",function(event){
+    const button=event.target.closest("[data-list-page]");if(button&&!button.disabled)changeListPage(button.dataset.listPage,Number(button.dataset.page));
+    const jump=event.target.closest("[data-list-jump]");if(jump&&!jump.disabled)jumpListPage(jump.closest('footer').querySelector('[data-list-jump-input]'));
+  });
+  document.addEventListener("change",function(event){if(event.target.matches('[data-list-size]'))changeListPageSize(event.target.dataset.listSize,event.target.value);});
+  document.addEventListener("input",function(event){if(event.target.matches('[data-list-jump-input]'))event.target.setCustomValidity('');});
+  document.addEventListener("keydown",function(event){if(event.key==='Enter'&&event.target.matches('[data-list-jump-input]')){event.preventDefault();jumpListPage(event.target);}});
   bind();
   syncServerSaveOptions();
   syncUploadModeUi();
   applyStressPreset("quick");
   initializeAuth();
+  window.addEventListener("liema:themechange",function(){
+    document.querySelectorAll("canvas").forEach(function(canvas){
+      const frame=chartFrames.get(canvas);
+      if(frame&&canvas.getBoundingClientRect().width)drawChart(canvas,frame.list,frame.color,frame.fixedMax,frame.adaptiveScale);
+    });
+  });
 });

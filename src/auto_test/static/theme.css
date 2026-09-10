@@ -1,0 +1,72 @@
+/* The existing colors in styles.css remain exact dark-mode fallbacks.
+   These semantic tokens also cover legacy selectors with high specificity. */
+:root {
+  --chart-grid: rgba(126,157,184,.24); --chart-blue: #4fb3ff;
+  --chart-gold: #f6b94f; --chart-indigo: #8f9dff; --chart-purple: #d28cff;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --ink: #23344b; --muted: #5b6e84; --line: #d6e0eb; --soft: #f2f5fa;
+  --white: #fff; --navy: #e8eff7; --navy-2: #edf3fa;
+  --teal: #1765bd; --teal2: #2477d0; --blue: #1765bd;
+  --gold: #95600b; --red: #b33345;
+  --surface: #fff; --surface-raised: #fff; --surface-soft: #f7f9fc;
+  --surface-hover: #eaf2fc; --input: #fff;
+  --border: #d6e0eb; --border-strong: #b9cadc;
+  --success: #087a58; --warning: #95600b; --danger: #b33345;
+  --shadow: 0 3px 14px rgba(33,52,76,.06);
+
+  --theme-text: #23344b; --theme-muted: #5b6e84;
+  --theme-accent: #1765bd; --theme-success: #087a58;
+  --theme-warning: #95600b; --theme-danger: #b33345; --theme-purple: #6d45bd;
+  --theme-canvas: #f2f5fa; --theme-surface: #fff; --theme-inset: #f6f8fc;
+  --theme-selected: #e6f0ff; --theme-hover: #edf3fb;
+  --theme-accent-soft: #eaf2fd; --theme-success-soft: #e6f5ee;
+  --theme-warning-soft: #fff4db; --theme-danger-soft: #fcebee;
+  --theme-purple-soft: #f0eafa;
+  --theme-fill: #2477d0; --theme-fill-hover: #1b65b6; --theme-on-fill: #fff;
+  --theme-line: #d6e0eb; --theme-line-strong: #b9cadc;
+  --theme-accent-line: #93b8e6; --theme-success-line: #9bccb8;
+  --theme-warning-line: #e0c68a; --theme-danger-line: #e5adb5;
+  --theme-shadow: rgba(33,52,76,.09); --theme-focus: rgba(36,119,208,.16);
+  --theme-overlay: rgba(26,40,58,.4);
+  --theme-scrollbar: #aabbd0;
+  --chart-grid: rgba(76,104,137,.18); --chart-blue: #1765bd;
+  --chart-gold: #a66a07; --chart-indigo: #5959bd; --chart-purple: #8944b5;
+}
+
+.theme-toggle { display:inline-flex; align-items:center; justify-content:center; gap:7px; flex:none; white-space:nowrap; }
+.top-actions .theme-toggle { display:inline-flex; }
+.top-actions { flex-shrink:0; }
+.top-actions>.button { flex-shrink:0; white-space:nowrap; }
+.theme-toggle svg { width:18px; height:18px; flex:none; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
+[data-theme="dark"] .theme-moon, [data-theme="light"] .theme-sun { display:none; }
+.auth-theme-toggle { position:absolute; top:20px; right:24px; z-index:3; }
+.auth-entry { position:relative; }
+.theme-toggle:focus-visible { outline:2px solid var(--blue); outline-offset:3px; }
+
+/* Authentication shares the global choice, instead of keeping a light form in dark mode. */
+:root[data-theme="dark"] .auth-entry { color-scheme:dark; color:var(--ink); background:var(--soft); }
+:root[data-theme="dark"] .auth-heading h1,
+:root[data-theme="dark"] .auth-setup-note b { color:var(--ink); }
+:root[data-theme="dark"] .auth-form .field>span { color:#c1d0de; }
+:root[data-theme="dark"] .auth-intro,
+:root[data-theme="dark"] .auth-project-note { color:var(--muted); }
+:root[data-theme="dark"] .auth-form input { color:var(--ink); background:var(--input); border-color:var(--border-strong); }
+:root[data-theme="dark"] .auth-form input:focus { border-color:var(--blue); background:var(--surface); }
+:root[data-theme="dark"] .auth-form input::placeholder { color:#7890a7; }
+:root[data-theme="dark"] .auth-intro.is-notice,
+:root[data-theme="dark"] .auth-project-note,
+:root[data-theme="dark"] .auth-setup-note { color:var(--muted); background:var(--surface-raised); border-color:var(--border-strong); }
+:root[data-theme="dark"] .auth-form .form-error { color:var(--danger); }
+:root[data-theme="light"] .auth-entry { color-scheme:light; }
+:root[data-theme="light"] .auth-overview { background:linear-gradient(135deg,#e8f1fd,#f4f8fd 65%,#e0edf9); }
+
+@media(max-width:1450px) { .topbar .theme-toggle [data-theme-label] { display:none; } .topbar .theme-toggle { min-width:38px; padding-inline:9px; } }
+@media(max-width:1100px) {
+  .top-actions .user-chip { display:block; min-width:42px; width:42px; padding:5px; }
+  .top-actions .user-chip b, .top-actions .user-chip small, .project-switcher>span { display:none; }
+  .project-switcher { min-width:180px; }
+}
+@media(max-width:760px) { .auth-theme-toggle { top:12px; right:16px; } .topbar .top-actions { gap:5px; } }
+@media(max-width:760px) { .project-switcher { min-width:0; } }

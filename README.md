@@ -1,4 +1,5 @@
 # 烈马自动化测试平台
+登录页与业务顶栏支持浅色/深色切换，默认深色，当前站点的选择保存在浏览器并在刷新时恢复；无须修改部署配置。
 
 > 新会话或接手开发时，请先阅读 [`PROJECT_PLAN.md`](PROJECT_PLAN.md)，再阅读 [`PROJECT_STRUCTURE.md`](PROJECT_STRUCTURE.md)。前者维护统一规划与进度，后者说明目录职责、启动入口和层级变更规则。
 
@@ -8,11 +9,11 @@
 
 - [`docs/product-requirements-document.md`](docs/product-requirements-document.md)：产品定位、功能规划、当前实现、技术栈、未完成范围和后续路线。
 - [`docs/delivery-acceptance.md`](docs/delivery-acceptance.md)：交付范围、角色权限、功能验收、安全边界、已知限制和验收记录模板。
-- [`docs/pycharm-lan-deployment-guide.md`](docs/pycharm-lan-deployment-guide.md)：从 Windows/PyCharm 构建 Linux 镜像、制作无敏感信息的交付包，并部署到一套新局域网环境的逐步操作手册。
+- [`docs/pycharm-lan-deployment-guide.md`](docs/pycharm-lan-deployment-guide.md)：全新机器部署与旧平台换机的主操作手册，覆盖离线包加载、外部依赖准备、全部生产变量、非默认对象前缀、首次初始化、数据/主密钥/五个卷迁移、EvalScope 验收和故障排查；交付 ZIP 根目录也提供 `DEPLOYMENT_GUIDE.md`。
 - [`docs/deployment-backup-rollback-runbook.md`](docs/deployment-backup-rollback-runbook.md)：正式部署前置信息、Redis 认证、MySQL/MinIO/持久卷备份、升级、恢复与回滚步骤。
 - [`docs/disaster-recovery-rehearsal-20260824.md`](docs/disaster-recovery-rehearsal-20260824.md)：2026-08-24 平台专用数据隔离恢复、MinIO 完整性校验和镜像回滚实操记录。
 
-`deploy/compose.yml` 是 Web、Worker、Redis 和持久卷的本地/自包含部署基线。正式服务器复用已有 MySQL、MinIO 和 Redis 时使用 `deploy/compose.external.yml` 与脱敏模板 `deploy/env.production.example`，该配置只创建平台 Web、Worker 和独立命名的持久卷，不定义第二套 Redis。上线前仍需配置访问控制、生产级 Redis 认证、外部密钥注入，并完成一次备份恢复和升级回滚演练。
+`deploy/compose.yml` 是 Web、Worker、Redis 和持久卷的本地/自包含部署基线。正式服务器复用已有 MySQL、MinIO 和 Redis 时使用 `deploy/compose.external.yml` 与脱敏模板 `deploy/env.production.example`，该配置只创建平台 Web、Worker 和独立命名的持久卷，不定义第二套 Redis。上线前仍需配置访问控制、与服务端一致的可选 Redis 密码配置、外部密钥注入，并完成一次备份恢复和升级回滚演练。
 
 构建服务器无法可靠访问软件源时，可先在受控联网环境运行 `python scripts/prepare_offline_bundle.py --output vendor`，核验 `vendor/SHA256SUMS` 后把依赖包送入部署环境，再使用 `DOCKER_BUILDKIT=0 docker build --network=none -f deploy/docker/Dockerfile.offline -t <不可变镜像版本> .` 构建。`vendor/` 默认不提交 Git，构建前仍需确保官方 `python:3.12-slim` 基础镜像已可信加载。
 
@@ -71,7 +72,7 @@ task_queue:
   interface_concurrency: 5
 ~~~
 
-如果运行环境分别提供 `SERVICE_REDIS_IP`、`SERVICE_REDIS_PORT`、`SERVICE_REDIS_PASSWORD`，平台会直接读取这些变量，密码不会拼入 URL、YAML 或日志。也可以使用应用专属的 `LIEMA_REDIS_HOST`、`LIEMA_REDIS_PORT`、`LIEMA_REDIS_USERNAME`、`LIEMA_REDIS_PASSWORD` 覆盖。启用认证的 Redis 6+ 若关闭了 `default` 用户，还必须同时提供对应 ACL 用户名。服务端拒绝凭据时平台会明确报告 Redis 不可用，不会静默退回匿名连接。
+如果运行环境分别提供 `SERVICE_REDIS_IP`、`SERVICE_REDIS_PORT`、`SERVICE_REDIS_PASSWORD`，平台会直接读取这些变量，密码不会拼入 URL、YAML 或日志。也可以使用应用专属的 `LIEMA_REDIS_HOST`、`LIEMA_REDIS_PORT`、`LIEMA_REDIS_USERNAME`、`LIEMA_REDIS_PASSWORD` 覆盖。启用认证的 Redis 6+ 若关闭了 `default` 用户，还必须同时提供对应 ACL 用户名。没有密码时留空即可免密连接，ACL 用户名仅在配置密码时使用。服务端拒绝凭据时平台会明确报告 Redis 不可用，不会静默退回匿名连接。
 
 分别启动页面与 Worker：
 

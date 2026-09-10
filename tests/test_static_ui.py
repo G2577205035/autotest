@@ -1,3 +1,4 @@
+import re
 import unittest
 from collections import defaultdict
 from html.parser import HTMLParser
@@ -34,6 +35,8 @@ class StaticWorkspaceTests(unittest.TestCase):
         cls.html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         cls.javascript = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
         cls.stylesheet = (STATIC_DIR / "styles.css").read_text(encoding="utf-8")
+        # Existing visual guards verify the exact dark fallback palette.
+        cls.dark_stylesheet = re.sub(r"var\(--theme-[\w-]+,((?:rgba?\([^)]*\))|#[0-9a-fA-F]+|white|black)\)", r"\1", cls.stylesheet)
         cls.parser = _WorkspaceMarkupParser()
         cls.parser.feed(cls.html)
 
@@ -194,30 +197,23 @@ class StaticWorkspaceTests(unittest.TestCase):
         self.assertIn('function readableEvaluationEventMessage(item)', self.javascript)
         self.assertIn('message.includes("�")', self.javascript)
         self.assertIn('EvalScope 评测已启动', self.javascript)
-        self.assertIn('.status.evaluation-not-met{color:#ffd27d', self.stylesheet)
+        self.assertIn('.status.evaluation-not-met{color:#ffd27d', self.dark_stylesheet)
         self.assertNotIn('shortId(run.id);', self.javascript)
         self.assertIn('.evaluation-metric-grid{display:grid;grid-template-columns:repeat(5', self.stylesheet)
         self.assertIn('.evaluation-detail-grid{display:grid;grid-template-columns:', self.stylesheet)
 
     def test_model_evaluation_run_and_report_lists_are_paginated_and_balanced(self):
-        for element_id in (
-            "evaluationRunsPageSummary",
-            "evaluationRunsPrevButton",
-            "evaluationRunsPageIndicator",
-            "evaluationRunsNextButton",
-            "evaluationReportCasesPageSummary",
-            "evaluationReportCasesPrevButton",
-            "evaluationReportCasesPageIndicator",
-            "evaluationReportCasesNextButton",
-        ):
+        for element_id in ("evaluationRunsPagination", "evaluationReportCasesPagination"):
             self.assertIn(f'id="{element_id}"', self.html)
+        for control in ('data-list-size', 'data-list-jump-input', 'data-list-jump'):
+            self.assertIn(control, self.javascript)
         self.assertIn("evaluationRunsPage: 1", self.javascript)
         self.assertIn("evaluationRunsPageSize: 7", self.javascript)
         self.assertIn("evaluationReportCasesPageSize: 8", self.javascript)
         self.assertIn("function setEvaluationRunsPage(page)", self.javascript)
         self.assertIn("function setEvaluationReportCasesPage(page)", self.javascript)
-        self.assertIn("state.evaluationRuns.slice(start,start+state.evaluationRunsPageSize)", self.javascript)
-        self.assertIn("cases.slice(start,start+state.evaluationReportCasesPageSize)", self.javascript)
+        self.assertIn("listPage(\"evaluationRuns\",state.evaluationRuns,state.evaluationRunsPageSize)", self.javascript)
+        self.assertIn("listPage(\"evaluationReportCases\",report.cases||[],state.evaluationReportCasesPageSize)", self.javascript)
         self.assertIn(".evaluation-layout{align-items:stretch}", self.stylesheet)
         self.assertIn(".evaluation-runs-panel{display:flex;flex-direction:column;min-height:640px}", self.stylesheet)
         self.assertIn(".evaluation-runs-panel>.table-wrap{flex:1;max-height:none}", self.stylesheet)
@@ -353,15 +349,15 @@ class StaticWorkspaceTests(unittest.TestCase):
         self.assertNotIn('key === "cpu_temp_c" || key === "gpu_temp_c"', self.javascript)
 
     def test_desktop_typography_has_readable_1080p_baseline_and_cache_version(self):
-        self.assertIn('styles.css?v=20260902.9', self.html)
-        self.assertIn('app.js?v=20260902.9', self.html)
+        self.assertIn('styles.css?v=20260910.4', self.html)
+        self.assertIn('app.js?v=20260910.4', self.html)
         self.assertIn('@media(min-width:981px)', self.stylesheet)
         self.assertIn('body{font-size:16px;line-height:1.6}', self.stylesheet)
         self.assertIn('table{font-size:15px}', self.stylesheet)
         self.assertIn('.field small{font-size:13px}', self.stylesheet)
         self.assertIn('.page-tabs{overflow-y:hidden}', self.stylesheet)
-        self.assertIn('.stress-form .stress-step{background:#0b1926}', self.stylesheet)
-        self.assertIn('.capability-result h4{color:#e5eef7}', self.stylesheet)
+        self.assertIn('.stress-form .stress-step{background:#0b1926}', self.dark_stylesheet)
+        self.assertIn('.capability-result h4{color:#e5eef7}', self.dark_stylesheet)
 
     def test_report_run_candidates_use_lightweight_run_directory_flag(self):
         self.assertIn(
@@ -374,8 +370,8 @@ class StaticWorkspaceTests(unittest.TestCase):
         self.assertIn('API Key 安全保护', self.html)
         self.assertIn('class="security-flow"', self.html)
         self.assertIn('id="modelCount"', self.html)
-        self.assertIn('.security-note h3{margin:0;color:#fff;font-size:22px', self.stylesheet)
-        self.assertIn('.security-flow strong{color:#edf6ff;font-size:15px', self.stylesheet)
+        self.assertIn('.security-note h3{margin:0;color:#fff;font-size:22px', self.dark_stylesheet)
+        self.assertIn('.security-flow strong{color:#edf6ff;font-size:15px', self.dark_stylesheet)
         self.assertIn('$("#modelCount").textContent = state.models.length + " 项"', self.javascript)
 
     def test_report_workspace_removes_legacy_width_caps_and_fills_canvas(self):
@@ -387,19 +383,19 @@ class StaticWorkspaceTests(unittest.TestCase):
 
     def test_server_performance_workspace_cannot_fall_back_to_light_cards(self):
         self.assertIn('#view-stress #stressForm .stress-step,#view-stress #stressForm .stress-step[open]', self.stylesheet)
-        self.assertIn('background:#0a1926!important', self.stylesheet)
+        self.assertIn('background:#0a1926!important', self.dark_stylesheet)
         self.assertIn('#view-stress #stressForm .stress-step-content', self.stylesheet)
         self.assertIn('background:transparent!important', self.stylesheet)
         self.assertIn('#view-stress .stress-status-grid .capability-result', self.stylesheet)
-        self.assertIn('.capability-result h4{color:#eef6fd!important}', self.stylesheet)
+        self.assertIn('.capability-result h4{color:#eef6fd!important}', self.dark_stylesheet)
 
     def test_stateful_components_are_protected_from_legacy_light_specificity(self):
         self.assertIn('#view-new-run .advanced-options .choice-box', self.stylesheet)
-        self.assertIn('background:#0a1825!important', self.stylesheet)
+        self.assertIn('background:#0a1825!important', self.dark_stylesheet)
         self.assertNotIn('.upload-zone.path-mode', self.stylesheet)
         self.assertIn('#view-stress .gpu-device-card.selected', self.stylesheet)
         self.assertIn('#view-stress .gpu-empty-state.blocked', self.stylesheet)
-        self.assertIn('.toast.error{color:#ffb4b8!important', self.stylesheet)
+        self.assertIn('.toast.error{color:#ffb4b8!important', self.dark_stylesheet)
 
     def test_formal_login_replaces_the_retired_page_key_gate(self):
         self.assertIn('id="authOverlay"', self.html)
@@ -438,9 +434,9 @@ class StaticWorkspaceTests(unittest.TestCase):
         self.assertIn('id="identityUsersBody"', self.html)
         self.assertIn('id="identityMembersBody"', self.html)
         self.assertIn('id="identityAuditBody"', self.html)
-        self.assertIn('id="identityAuditPrevButton"', self.html)
-        self.assertIn('id="identityAuditNextButton"', self.html)
-        self.assertIn('id="identityAuditPageSummary"', self.html)
+        self.assertIn('id="identityAuditPagination"', self.html)
+        self.assertIn('id="identityAuditPagination"', self.html)
+        self.assertIn('id="identityAuditPagination"', self.html)
         self.assertIn('project_admin:"项目管理员"', self.javascript)
         self.assertIn('/api/identity/audit-events?page=', self.javascript)
         self.assertIn('identityAuditPageSize: 20', self.javascript)
@@ -465,8 +461,8 @@ class StaticWorkspaceTests(unittest.TestCase):
         self.assertIn('id="identityProjectSearch"', self.html)
         self.assertIn('id="identityRoleSearch"', self.html)
         self.assertIn('id="identityProjectsBody"', self.html)
-        self.assertIn('id="identityUsersPageSummary"', self.html)
-        self.assertIn('id="identityProjectsPageSummary"', self.html)
+        self.assertIn('id="identityUsersPagination"', self.html)
+        self.assertIn('id="identityProjectsPagination"', self.html)
         self.assertIn('function activateIdentityTab(tab)', self.javascript)
         self.assertIn('function openIdentityUserDrawer(userId)', self.javascript)
         self.assertIn('function openIdentityProjectDrawer(projectId)', self.javascript)
@@ -496,7 +492,7 @@ class StaticWorkspaceTests(unittest.TestCase):
         self.assertIn('authorized:"已授权待执行"', self.javascript)
         self.assertIn('["authorized","queued","running"].includes(job.status)', self.javascript)
         self.assertIn('重新配置授权', self.javascript)
-        self.assertIn('.status.authorized{color:#8dccff!important', self.stylesheet)
+        self.assertIn('.status.authorized{color:#8dccff!important', self.dark_stylesheet)
         self.assertIn('th:last-child,#view-stress [data-workspace-name="history"] td:last-child{position:sticky', self.stylesheet)
 
     def test_server_performance_is_session_first_and_reports_are_selectable(self):
@@ -566,7 +562,7 @@ class StaticWorkspaceTests(unittest.TestCase):
         self.assertIn('if(isActiveStressJob(job)) await refreshStress(false);', self.javascript)
         self.assertIn('else if(job) renderStressTask(job);', self.javascript)
         self.assertIn('stopStressJob(state.stressJobId)', self.javascript)
-        self.assertIn('.stress-live-task[data-status="running"]{border-color:#3175a8}', self.stylesheet)
+        self.assertIn('.stress-live-task[data-status="running"]{border-color:#3175a8}', self.dark_stylesheet)
         self.assertIn('.stress-live-task-meta{display:grid;grid-template-columns:1.2fr 1fr 1fr .7fr', self.stylesheet)
 
     def test_gpu_live_cards_open_details_in_a_right_side_drawer(self):
@@ -584,11 +580,11 @@ class StaticWorkspaceTests(unittest.TestCase):
         self.assertNotIn('点 · 读数稳定', self.javascript)
         self.assertNotIn('class="gpu-live-details"', self.javascript)
         self.assertNotIn('class="gpu-live-charts"', self.javascript)
-        self.assertIn('#view-stress .gpu-live-card.selected{border-color:#419cff', self.stylesheet)
+        self.assertIn('#view-stress .gpu-live-card.selected{border-color:#419cff', self.dark_stylesheet)
         self.assertIn('.gpu-detail-drawer.open{visibility:visible;transform:translateX(0)}', self.stylesheet)
         self.assertIn('.gpu-drawer-detail-grid{display:grid;grid-template-columns:repeat(2', self.stylesheet)
         self.assertIn('.gpu-drawer-charts canvas{width:100%;height:150px}', self.stylesheet)
-        self.assertIn('border:1px solid #337a67', self.stylesheet)
+        self.assertIn('border:1px solid #337a67', self.dark_stylesheet)
         self.assertNotIn('data-stress-workspace=', self.html)
         self.assertNotIn('data-current-view=', self.html)
         self.assertNotIn('neutral light canvas', self.stylesheet)

@@ -132,6 +132,9 @@ class EvaluationModelClient:
             "max_tokens": max(1, int(max_tokens)),
             "stream": bool(stream),
         }
+        if stream:
+            payload["stream_options"] = {"include_usage": True}
+        response = None
         try:
             response = self.session.post(
                 chat_completions_url(base_url),
@@ -162,9 +165,11 @@ class EvaluationModelClient:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 token_source=source,
-                ttft_ms=latency_ms if content else None,
+                ttft_ms=None,
                 latency_ms=latency_ms,
                 chunks=1 if content else 0,
+                error_type=("empty_response" if not content.strip() else "output_truncated" if choice.get("finish_reason") == "length" else ""),
+                error_message=("模型没有返回有效正文" if not content.strip() else "输出达到 Token 上限，正文不完整" if choice.get("finish_reason") == "length" else ""),
             )
         except Exception as exc:
             return ObservedModelResponse(
@@ -173,6 +178,9 @@ class EvaluationModelClient:
                 error_type=self._error_type(exc, status),
                 error_message=f"{type(exc).__name__}: {str(exc)[:300]}",
             )
+        finally:
+            if response is not None:
+                response.close()
 
     def _read_stream(
         self,
@@ -187,12 +195,15 @@ class EvaluationModelClient:
         request_id = ""
         usage_input: int | None = None
         usage_output: int | None = None
-        for raw_line in response.iter_lines(decode_unicode=True):
+        done = False
+        response.encoding = "utf-8"
+        for raw_line in response.iter_lines(chunk_size=1, decode_unicode=True):
             line = str(raw_line or "").strip()
             if not line or not line.startswith("data:"):
                 continue
             data = line[5:].strip()
             if data == "[DONE]":
+                done = True
                 break
             try:
                 document = json.loads(data)
@@ -227,6 +238,6 @@ class EvaluationModelClient:
             ttft_ms=(first_token_at - started) * 1000 if first_token_at is not None else None,
             latency_ms=(completed - started) * 1000,
             chunks=chunks,
-            error_type="" if text else "empty_response",
-            error_message="" if text else "模型返回了成功状态，但没有有效正文",
+            error_type=("empty_response" if not text.strip() else "output_truncated" if finish_reason == "length" else "stream_interrupted" if not (done and finish_reason) else ""),
+            error_message=("模型返回了成功状态，但没有有效正文" if not text.strip() else "输出达到 Token 上限，正文不完整" if finish_reason == "length" else "流式响应缺少正常结束标记" if not (done and finish_reason) else ""),
         )

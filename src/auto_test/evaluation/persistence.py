@@ -301,7 +301,7 @@ class ModelEvaluationStoreMixin:
         return [self._decode_model_eval_version(row) or {} for row in rows]
 
     def list_model_eval_suite_cases(
-        self, project_id: str, version_id: str, limit: int = 1000
+        self, project_id: str, version_id: str, limit: int = 1000, offset: int = 0
     ) -> list[dict[str, Any]]:
         if not self.get_model_eval_suite_version(project_id, version_id):
             return []
@@ -309,8 +309,8 @@ class ModelEvaluationStoreMixin:
             rows = connection.execute(
                 """SELECT id,version_id,case_key,category,tags_json,payload_json,weight,sort_order
                    FROM model_eval_cases WHERE version_id=?
-                   ORDER BY sort_order ASC,id ASC LIMIT ?""",
-                (version_id, max(1, min(int(limit), 5000))),
+                   ORDER BY sort_order ASC,id ASC LIMIT ? OFFSET ?""",
+                (version_id, max(1, min(int(limit), 5000)), max(0, int(offset))),
             ).fetchall()
         return [self._decode_model_eval_case(row) or {} for row in rows]
 
@@ -758,7 +758,7 @@ class ModelEvaluationStoreMixin:
                 summary = json.loads(run_row["summary_json"] or "{}") if run_row else {}
             except (TypeError, ValueError):
                 summary = {}
-            summary["quality_score"] = round(sum(scores) / len(scores) * 100, 2) if scores else None
+            summary["quality_score"] = round(sum(scores) / len(scores) * 100, 2) if scores and summary.get("mode") != "full" else None
             scoring = dict(summary.get("scoring") or {})
             scoring.update(
                 {

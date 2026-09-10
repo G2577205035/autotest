@@ -716,6 +716,8 @@ def _required_permission(method: str, path: str) -> str:
         return "project:view"
     if re.fullmatch(r"/api/runs/[^/]+/reports", path):
         return "report:manage"
+    if method == "POST" and re.fullmatch(r"/api/model-evaluation/runs/[^/]+/report/conclusion", path):
+        return "report:manage"
     if path == "/api/interface-scenarios/batch-execute" or re.fullmatch(
         r"/api/interface-scenarios/[^/]+/execute", path
     ):

@@ -80,7 +80,7 @@ class AdvancedEvaluationDomainTests(unittest.TestCase):
         score = score_response(response, rules)
         self.assertTrue(score["passed"])
         judge = parse_judge_response(
-            '```json\n{"score":0.9,"confidence":0.8,"reason":"有依据","rubric":[]}\n```',
+            '```json\n{"score":0.9,"confidence":0.8,"reason":"有依据","rubric":[{"name":"忠实度","score":0.9}]}\n```',
             ["忠实度"],
         )
         self.assertEqual(judge["status"], "completed")
@@ -95,9 +95,26 @@ class AdvancedEvaluationDomainTests(unittest.TestCase):
         )
         self.assertFalse(guarded["passed"])
         self.assertEqual(guarded["score"], 0.0)
-
         self.assertEqual(select_manual_review_indices(24, 25), {0, 5, 9, 14, 18, 23})
         self.assertEqual(select_manual_review_indices(24, 0), set())
+
+    def test_judge_requires_exact_complete_finite_rubric(self):
+        rubric = ["忠实度与完整性", {"name": "流畅度"}]
+        valid = [{"name": "忠实度与完整性", "score": 0.9}, {"name": "流畅度", "score": 0.8}]
+        complete = parse_judge_response(json.dumps({"score": 0.85, "rubric": valid}), rubric)
+        self.assertEqual(complete["status"], "completed")
+        malformed = [[], valid[:1], valid + valid[:1], [{"name": "事实忠实度", "score": 0.9}, valid[1]],
+                     ["invalid", valid[1]]]
+        malformed += [[{"name": valid[0]["name"], "score": value}, valid[1]] for value in [None, True, "0.9", float("nan"), float("inf"), -0.1, 1.1]]
+        for details in malformed:
+            with self.subTest(details=details):
+                judge = parse_judge_response(json.dumps({"score": 0.99, "rubric": details}), rubric)
+                self.assertEqual(judge["status"], "invalid")
+                self.assertIsNone(judge["score"])
+                self.assertEqual(json.dumps(judge["rubric"]), json.dumps(details))
+                merged = merge_rule_and_judge_score({"score": 0.8, "passed": True}, judge)
+                self.assertEqual(merged["score"], 0.8)
+                self.assertEqual(merged["scoring_source"], "deterministic_rules")
 
     def test_import_jsonl_csv_documents_and_safe_zip(self):
         jsonl = (
@@ -176,8 +193,8 @@ class AdvancedEvaluationDomainTests(unittest.TestCase):
             max_tokens=128,
             timeout=30,
         )[3]
-        self.assertEqual(perf["parallel"], [1])
-        self.assertTrue(perf["open_loop"])
+        self.assertEqual(perf["parallel"], [16, 16, 16, 16])
+        self.assertFalse(perf["open_loop"])
         self.assertEqual(perf["rate"], [1.0, 2.0, 4.0, 8.0])
         self.assertEqual(perf["number"], [60, 120, 240, 480])
         self.assertEqual(perf["duration"], 60)
@@ -294,6 +311,26 @@ class AdvancedEvaluationApiTests(unittest.TestCase):
             headers={"X-Project-ID": other["id"]},
         )
         self.assertEqual(hidden.status_code, 404)
+
+    def test_suite_detail_pages_cover_all_cases_and_preserve_project_isolation(self):
+        project_id = self.identity["current_project"]["id"]
+        suite = self.store.save_model_eval_suite(project_id, {"name": "分页详情验证", "category": "custom"})
+        cases = [{"case_key": f"case-{i}", "payload": {"prompt": f"第 {i} 条完整输入"}} for i in range(1007)]
+        version = self.store.publish_model_eval_suite_version(project_id, suite["id"], {}, cases)
+        url = f"/api/model-evaluation/suites/{suite['id']}/versions/{version['id']}"
+        first = self.client.get(url + "?page=1&page_size=5").json()
+        second = self.client.get(url + "?page=2&page_size=5").json()
+        last = self.client.get(url + "?page=9999&page_size=5").json()
+        self.assertEqual((first["total"], first["total_pages"]), (1007, 202))
+        self.assertEqual([row["case_key"] for row in second["cases"]], [f"case-{i}" for i in range(5, 10)])
+        self.assertFalse({row["id"] for row in first["cases"]} & {row["id"] for row in second["cases"]})
+        self.assertEqual((last["page"], len(last["cases"])), (202, 2))
+        self.assertEqual(last["cases"][-1]["payload"]["prompt"], "第 1006 条完整输入")
+        self.assertEqual(len(self.client.get(url).json()["cases"]), 1000)
+        self.assertEqual(self.client.get(url + "?page_size=0").status_code, 422)
+        self.assertEqual(self.client.get(url.replace(suite["id"], "wrong-suite")).status_code, 404)
+        other = self.store.create_project("OTHER-DETAIL", "其他项目")
+        self.assertEqual(self.client.get(url, headers={"X-Project-ID": other["id"]}).status_code, 404)
 
     def test_full_mock_review_comparison_and_mismatch_confirmation(self):
         first_id = self._run_mock_full()

@@ -415,6 +415,26 @@ class ModelEvaluationBackendTests(unittest.TestCase):
             self.assertEqual(finished["status"], "failed")
             self.assertIn("RuntimeError", finished["error"])
 
+    def test_backend_resolves_installed_runner_without_a_checkout(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+            "os.environ", {"LIEMA_EVALSCOPE_PYTHON": sys.executable}
+        ):
+            root = Path(temp_dir)
+            backend = create_model_evaluation_backend_resolver(root)(
+                {"backend": "evalscope", "backend_version": "1.11.1"}
+            )
+            self.assertFalse((root / "src").exists())
+            self.assertTrue(
+                (backend.runtime.source_root / "auto_test/evaluation/evalscope_runner.py").is_file()
+            )
+            result = backend.run(
+                EvaluationRequest(
+                    run_id="installed-runner", project_id="project-a", mode="mock",
+                    task_config={}, work_dir=root / "result",
+                )
+            )
+            self.assertEqual(result.status, "completed")
+
     def test_isolated_subprocess_preserves_chinese_event_messages(self):
         source_root = Path(__file__).resolve().parents[1] / "src"
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
@@ -52,6 +53,9 @@ def create_model_evaluation_backend_resolver(
             return DeterministicMockBackend()
         if backend_name == "native":
             return NativeEvaluationBackend()
+        if backend_name == "full":
+            from auto_test.evaluation.backends.full import FullEvaluationBackend
+            return FullEvaluationBackend(resolve)
         if backend_name != "evalscope":
             raise ValueError(f"不支持的模型评测后端：{backend_name}")
         requested_version = str(run.get("backend_version") or version).strip()
@@ -71,7 +75,9 @@ def create_model_evaluation_backend_resolver(
             EvalScopeRuntimeConfig(
                 python_executable=python_path.resolve(),
                 version=version,
-                source_root=root / "src",
+                # Wheels install under site-packages; deployment work directories
+                # do not necessarily contain the repository's src/ tree.
+                source_root=Path(__file__).resolve().parents[2],
                 stop_grace_seconds=float(values.get("stop_grace_seconds") or 5),
                 cache_root=cache_root.resolve() if cache_root else None,
             )
@@ -228,12 +234,20 @@ class ModelEvaluationManager:
         project_id = str(run["project_id"])
         backend: EvaluationBackend | None = None
         work_dir = None
+        resource_sampler = None
         try:
             backend = self.backend_resolver(run)
             work_dir = self.artifact_storage.workspace(
                 "model-evaluations", project_id, run_id
             )
             snapshot = dict(run.get("snapshot") or {})
+            from auto_test.evaluation.resources import capture_execution_environment
+            test_environment = capture_execution_environment()
+            (work_dir / "test_environment.json").write_text(json.dumps(test_environment, ensure_ascii=False, indent=2), encoding="utf-8")
+            if snapshot.get("resource_binding"):
+                from auto_test.evaluation.resources import EvaluationResourceSampler
+                resource_sampler = EvaluationResourceSampler(self.platform_store, snapshot["resource_binding"], work_dir)
+                resource_sampler.start()
             task_config = dict(snapshot.get("task_config") or {})
             secret_env = _resolve_request_secrets(
                 task_config,
@@ -260,6 +274,10 @@ class ModelEvaluationManager:
                 or self.platform_store.is_model_eval_run_stop_requested(run_id),
             )
             self._persist_case_results(project_id, run_id, result.raw)
+            result.summary["test_environment"] = test_environment
+            if resource_sampler:
+                result.summary["resource_correlation"] = resource_sampler.finish(result.summary)
+            (work_dir / "summary.json").write_text(json.dumps(result.summary, ensure_ascii=False, indent=2), encoding="utf-8")
             self.artifact_storage.publish_tree(work_dir)
             error = result.error_type if result.status == "failed" else ""
             return self.platform_store.finish_model_eval_run(
@@ -284,6 +302,8 @@ class ModelEvaluationManager:
                 error=f"Worker 运行时异常：{type(exc).__name__}",
             )
         finally:
+            if resource_sampler:
+                resource_sampler.close()
             with self._active_lock:
                 self._active_backend.pop(run_id, None)
 

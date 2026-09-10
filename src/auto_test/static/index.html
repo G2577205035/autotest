@@ -1,12 +1,14 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="dark light">
   <title>烈马自动化测试平台</title>
   <link rel="icon" type="image/png" href="/static/assets/liema-favicon.png">
-  <link rel="stylesheet" href="/static/styles.css?v=20260902.9">
+  <script src="/static/theme.js?v=20260910.4"></script>
+  <link rel="stylesheet" href="/static/styles.css?v=20260910.4">
+  <link rel="stylesheet" href="/static/theme.css?v=20260910.4">
 </head>
 <body>
   <div class="auth-overlay" id="authOverlay" data-mode="login">
@@ -27,6 +29,7 @@
       </section>
 
       <section class="auth-entry" aria-label="账户登录">
+        <button class="button ghost theme-toggle auth-theme-toggle" type="button" data-theme-toggle aria-label="切换为浅色模式" title="切换为浅色模式"><svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.4 1.4m11.2 11.2L19 19M5 19l1.4-1.4M17.6 6.4 19 5"/></svg><svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.2A8.5 8.5 0 0 1 8.8 4a8.5 8.5 0 1 0 11.2 11.2Z"/></svg><span data-theme-label>浅色模式</span></button>
         <div class="auth-entry-inner">
           <header class="auth-heading">
             <h1 id="authTitle">登录</h1>
@@ -82,6 +85,7 @@
         <div class="top-actions">
           <label class="project-switcher"><span>业务项目</span><select id="projectSwitcher" aria-label="切换业务项目"></select></label>
           <button class="user-chip" id="userChip" type="button" title="当前登录用户"><span id="userAvatar">—</span><b id="currentUserName">—</b><small id="currentUserRole">—</small></button>
+          <button class="button ghost theme-toggle" type="button" data-theme-toggle aria-label="切换为浅色模式" title="切换为浅色模式"><svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.4 1.4m11.2 11.2L19 19M5 19l1.4-1.4M17.6 6.4 19 5"/></svg><svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.2A8.5 8.5 0 0 1 8.8 4a8.5 8.5 0 1 0 11.2 11.2Z"/></svg><span data-theme-label>浅色模式</span></button>
           <button class="button ghost" id="refreshButton">刷新数据</button>
           <button class="button ghost logout-button" id="logoutButton">退出</button>
         </div>
@@ -100,7 +104,7 @@
           <div class="active-run" id="activeRunEmpty"><div class="empty-ring">✓</div><p>当前没有正在运行的任务</p><button class="button secondary" data-goto="new-run">创建测试任务</button></div>
           <div class="active-run-details hidden" id="activeRunDetails"><div class="run-meta"><strong id="activeRunName">—</strong><span id="activeRunMessage">—</span></div><div class="progress-row"><div class="progress"><i id="activeProgressBar"></i></div><b id="activeProgressText">0%</b></div><div class="stage-track" id="stageTrack"></div><button class="button secondary" data-goto="monitor">进入实时监控</button></div>
         </article>
-        <article class="panel dashboard-history-panel"><div class="panel-head"><div><p class="eyebrow">RECENT RUNS</p><h3>最近执行记录</h3><p class="muted">按案件、目标环境与执行结果识别任务。</p></div><button class="text-button" data-goto="monitor">查看实时监控 →</button></div><div class="table-wrap"><table class="recent-runs-table"><thead><tr><th>测试案件</th><th>目标环境</th><th>测试内容</th><th>开始时间</th><th>耗时</th><th>执行结果</th><th>操作</th></tr></thead><tbody id="recentRunsBody"></tbody></table></div></article>
+        <article class="panel dashboard-history-panel"><div class="panel-head"><div><p class="eyebrow">RECENT RUNS</p><h3>最近执行记录</h3><p class="muted">按案件、目标环境与执行结果识别任务。</p></div><button class="text-button" data-goto="monitor">查看实时监控 →</button></div><div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="最近执行记录，可滚动查看"><table class="recent-runs-table"><thead><tr><th>测试案件</th><th>目标环境</th><th>测试内容</th><th>开始时间</th><th>耗时</th><th>执行结果</th><th>操作</th></tr></thead><tbody id="recentRunsBody"></tbody></table></div><footer class="table-pagination list-pagination" id="recentRunsPagination" aria-label="最近执行记录分页"></footer></article>
       </section>
 
       <section class="view" id="view-new-run">
@@ -186,7 +190,7 @@
                 <select id="serverProfileStatusFilter" aria-label="筛选服务器状态"><option value="all">全部状态</option><option value="connected">监控中</option><option value="disconnected">未连接</option></select>
               </div>
             </div>
-            <div class="server-asset-table-wrap">
+            <div class="server-asset-table-wrap paged-scroll" tabindex="0" role="region" aria-label="服务器资产，可滚动查看">
               <table class="server-asset-table">
                 <thead><tr><th>服务器</th><th>SSH 账户</th><th>凭据策略</th><th>会话状态</th><th>最近使用</th><th>操作</th></tr></thead>
                 <tbody id="serverProfileList"></tbody>
@@ -197,7 +201,7 @@
                 <p>添加第一台服务器后，可从列表直接连接并查看实时状态。</p>
                 <button class="button primary" type="button" data-server-new>添加服务器</button>
               </div>
-            </div>
+            </div><footer class="table-pagination list-pagination" id="serverProfilesPagination" aria-label="服务器资产分页"></footer>
           </article>
 
           <div class="stress-status-grid hidden" id="serverSessionInsight">
@@ -346,7 +350,7 @@
         <article class="panel hidden" data-workspace-panel="stress" data-workspace-name="history">
           <div class="panel-head"><div><p class="eyebrow">PERFORMANCE REPORTS</p><h3>服务器性能测试记录</h3></div><div class="report-actions stress-report-picker"><select id="stressReportJobSelect" aria-label="选择性能报告"></select><button class="text-button" id="downloadStressDocxButton">下载 DOCX</button><button class="text-button" id="downloadStressPdfButton">下载 PDF</button></div></div>
           <select id="stressJobSelect" class="hidden" aria-hidden="true"></select>
-          <div class="table-wrap"><table><thead><tr><th>服务器</th><th>测试方案</th><th>状态</th><th>开始时间</th><th>结果说明</th><th>操作</th></tr></thead><tbody id="stressJobsBody"></tbody></table></div>
+          <div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="服务器性能报告与任务，可滚动查看"><table><thead><tr><th>服务器</th><th>测试方案</th><th>状态</th><th>开始时间</th><th>结果说明</th><th>操作</th></tr></thead><tbody id="stressJobsBody"></tbody></table></div><footer class="table-pagination list-pagination" id="stressJobsPagination" aria-label="服务器性能报告与任务分页"></footer>
         </article>
       </section>
 
@@ -360,7 +364,7 @@
           <form class="panel" id="reportForm" data-workspace-panel="reports" data-workspace-name="create"><div class="panel-head"><h3>创建报告</h3><span class="step-chip">DOCX + PDF</span></div><label class="field"><span>来源运行</span><select id="reportRunSelect" required></select></label><div class="form-grid two"><label class="field"><span>报告标题</span><input id="reportTitle" value="烈马自动化测试平台性能测试报告"></label><label class="field"><span>编制单位</span><input id="reportPreparedBy" value="质量与性能测试团队"></label></div><label class="field"><span>测试背景补充</span><textarea id="reportOverview" rows="3" placeholder="项目背景、验收范围或测试目标"></textarea></label><label class="field"><span>测试环境补充</span><textarea id="reportEnvironment" rows="3" placeholder="版本、部署拓扑、服务器型号等现场信息"></textarea></label><label class="field"><span>综合结论（留空则自动生成）</span><textarea id="reportConclusion" rows="4" placeholder="可人工定稿；留空时按规则或模型生成"></textarea></label><label class="switch-row"><input id="useModelConclusion" type="checkbox"><span><b>使用启用中的模型生成结论</b><small>模型不可用时自动降级为规则结论，不阻断报告。</small></span></label><button class="button primary wide" type="submit">提交报告生成任务</button></form>
           <article class="panel hidden" data-workspace-panel="reports" data-workspace-name="template"><div class="panel-head"><div><p class="eyebrow">TEMPLATE</p><h3>六章内容结构</h3></div><div class="report-actions"><input class="template-name" id="templateName" value="企业性能测试报告"><button class="button secondary" id="saveTemplateButton">保存模板</button></div></div><div id="templateSections" class="section-editor"></div></article>
         </div>
-        <article class="panel hidden" data-workspace-panel="reports" data-workspace-name="jobs"><div class="panel-head"><div><p class="eyebrow">ARTIFACTS</p><h3>报告任务与产物</h3></div><button class="text-button" id="refreshReportsButton">刷新</button></div><div class="table-wrap"><table><thead><tr><th>任务</th><th>来源运行</th><th>模板</th><th>状态</th><th>尝试</th><th>产物</th></tr></thead><tbody id="reportJobsBody"></tbody></table></div></article>
+        <article class="panel hidden" data-workspace-panel="reports" data-workspace-name="jobs"><div class="panel-head"><div><p class="eyebrow">ARTIFACTS</p><h3>报告任务与产物</h3></div><button class="text-button" id="refreshReportsButton">刷新</button></div><div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="报告任务，可滚动查看"><table><thead><tr><th>任务</th><th>来源运行</th><th>模板</th><th>状态</th><th>尝试</th><th>产物</th></tr></thead><tbody id="reportJobsBody"></tbody></table></div><footer class="table-pagination list-pagination" id="reportJobsPagination" aria-label="报告任务分页"></footer></article>
       </section>
 
       <section class="view" id="view-evaluation">
@@ -381,38 +385,38 @@
           <div class="evaluation-layout">
           <form class="panel evaluation-launch-panel" id="evaluationForm">
             <div class="panel-head"><div><p class="eyebrow">NEW EVALUATION</p><h3>新建模型评测</h3></div><span class="step-chip">项目隔离</span></div>
-            <label class="field"><span>评测类型</span><select id="evaluationRunKind"><option value="mock">Mock 流程验证</option><option value="mock_full">完整进阶流程验证</option><option value="foundation">基础能力与鲁棒性</option><option value="translation">中英双向翻译</option><option value="wmt_translation">WMT2024++ 标准翻译</option><option value="report_writing">报告写作能力</option><option value="intelligence">情报生产能力</option><option value="standard_benchmark">标准 Benchmark</option><option value="concurrency">并发阶梯</option><option value="deep_performance">深度性能与容量</option><option value="custom">项目自定义测试集</option></select><small id="evaluationRunKindHint">不调用真实模型，用于验证排队、监控、停止和结果链路。</small></label>
+            <label class="field"><span>评测类型</span><select id="evaluationRunKind"><option value="full">全量测评（全部维度）</option><option value="mock">Mock 流程验证</option><option value="mock_full">完整进阶流程验证</option><option value="foundation">基础能力与鲁棒性</option><option value="translation">中英双向翻译</option><option value="wmt_translation">WMT2024++ 标准翻译</option><option value="report_writing">报告写作能力</option><option value="intelligence">情报生产能力</option><option value="standard_benchmark">标准 Benchmark</option><option value="concurrency">并发阶梯</option><option value="deep_performance">深度性能与容量</option><option value="custom">项目自定义测试集</option></select><small id="evaluationRunKindHint">不调用真实模型，用于验证排队、监控、停止和结果链路。</small></label>
             <label class="field"><span>被测模型</span><select id="evaluationModelProfile"><option value="">Mock 不需要选择模型</option></select><small>模型地址只能来自“模型配置”，页面不会读取或回显 API Key。</small></label>
-            <label class="field hidden" id="evaluationCustomSuiteField"><span>项目测试集版本</span><select id="evaluationSuiteVersion"><option value="">请选择已发布的项目测试集</option></select><small>版本发布后内容和哈希不可变。</small></label>
-            <div class="form-grid two"><label class="field"><span>运行方案</span><select id="evaluationPlan"><option value="quick">快速体检</option><option value="standard">标准评测</option><option value="deep">深度评测</option></select></label><label class="field"><span>最大输出 Tokens</span><input id="evaluationMaxTokens" type="number" min="8" max="8192" value="256"></label></div>
-            <div class="form-grid two"><label class="field"><span>单请求超时（秒）</span><input id="evaluationTimeout" type="number" min="1" max="600" value="60"></label><label class="switch-row evaluation-stream-switch"><input id="evaluationStream" type="checkbox"><span><b>使用流式调用</b><small>首个非空正文分片用于 TTFT。</small></span></label></div>
-            <details class="advanced-options evaluation-advanced-options"><summary>评分、人工复核与资源关联</summary><div class="advanced-grid"><label class="field"><span>独立裁判模型</span><select id="evaluationJudgeProfile"><option value="">不使用裁判模型</option></select><small>不能与被测模型相同；无裁判时保留规则分与待人工复核状态。</small></label><label class="field"><span>人工复核抽样比例（%）</span><input id="evaluationManualReviewPercent" type="number" min="0" max="100" value="0"></label><label class="field"><span>关联服务器会话</span><select id="evaluationServerSession"><option value="">不关联服务器资源</option></select><small>保存提交时资源基线；深度性能结果展示资源关联可用性。</small></label></div></details>
+            <label class="field hidden" id="evaluationCustomSuiteField"><span>项目测试集版本</span><select id="evaluationSuiteVersion"><option value="">请选择已发布的项目测试集</option></select><small>全量测评可选附加；自定义评测必选。所选版本全部用例都会执行，内容和哈希不可变。</small></label>
+            <div class="form-grid two"><label class="field"><span>运行方案</span><select id="evaluationPlan"><option value="quick">快速体检</option><option value="standard">标准评测</option><option value="deep">深度评测</option></select></label><label class="field"><span>最大输出 Tokens</span><input id="evaluationMaxTokens" type="number" min="8" max="8192" value="4096"></label></div>
+            <div class="form-grid two"><label class="field"><span>单请求超时（秒）</span><input id="evaluationTimeout" type="number" min="1" max="600" value="120"></label><label class="switch-row evaluation-stream-switch"><input id="evaluationStream" type="checkbox"><span><b>使用流式调用</b><small>首个非空正文分片用于 TTFT。</small></span></label></div>
+            <details class="advanced-options evaluation-advanced-options"><summary>评分、人工复核与资源关联</summary><div class="advanced-grid"><label class="field"><span>独立裁判模型</span><select id="evaluationJudgeProfile"><option value="">不使用裁判模型</option></select><small>不能与被测模型相同；无裁判时保留规则分与待人工复核状态。</small></label><label class="field"><span>人工复核抽样比例（%）</span><input id="evaluationManualReviewPercent" type="number" min="0" max="100" value="0"></label><label class="field"><span>关联模型服务器</span><select id="evaluationServerSession"><option value="">不关联服务器资源</option></select><small>选择已保存的模型服务器，Worker 将持续只读采样；活动会话须关联已保存资产。未选择则标记资源缺测。</small></label></div></details>
             <div class="evaluation-submit-note"><i></i><span id="evaluationSubmitNote">Mock 运行不产生真实模型负载。</span></div>
-            <button class="button primary wide" id="evaluationSubmitButton" type="submit">提交评测任务</button>
+            <button class="button primary wide" id="evaluationFullButton" type="submit" name="scope" value="full">全量测评（全部维度）</button><p class="muted evaluation-full-help">执行全部内置专项，含 200 条双向翻译、流式与非流式基础、问答、写作、情报及最高 16 并发的性能阶段。全量固定深度方案；主观裁判和服务器采样请在上方配置，缺项会列入报告。</p><button class="button secondary wide" id="evaluationSubmitButton" type="submit">提交评测任务</button>
             <p class="form-error" id="evaluationFormError" role="alert"></p>
           </form>
           <article class="panel evaluation-runs-panel">
             <div class="panel-head"><div><p class="eyebrow">RECENT RUNS</p><h3>评测运行</h3></div><button class="text-button" id="refreshEvaluationButton" type="button">刷新</button></div>
-            <div class="table-wrap"><table><thead><tr><th>类型 / 模型</th><th>方案</th><th>阶段</th><th>进度</th><th>提交时间</th><th>操作</th></tr></thead><tbody id="evaluationRunsBody"></tbody></table></div>
-            <footer class="table-pagination evaluation-runs-pagination" aria-label="模型评测运行分页"><span id="evaluationRunsPageSummary">共 0 条</span><div><button class="text-button" id="evaluationRunsPrevButton" type="button">上一页</button><b id="evaluationRunsPageIndicator">第 1 / 1 页</b><button class="text-button" id="evaluationRunsNextButton" type="button">下一页</button></div></footer>
+            <div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="模型评测运行，可滚动查看"><table><thead><tr><th>类型 / 模型</th><th>方案</th><th>阶段</th><th>进度</th><th>提交时间</th><th>操作</th></tr></thead><tbody id="evaluationRunsBody"></tbody></table></div>
+            <footer class="table-pagination evaluation-runs-pagination list-pagination" id="evaluationRunsPagination" aria-label="模型评测运行分页"></footer>
           </article>
           </div>
         </div>
         <article class="panel evaluation-detail-panel hidden" id="evaluationDetailPanel" data-workspace-panel="evaluation" data-workspace-name="detail">
           <div class="panel-head evaluation-detail-head"><div><p class="eyebrow">RUN MONITOR</p><h3 id="evaluationDetailTitle">选择一条评测查看运行监控</h3><p id="evaluationDetailMessage">提交后可在这里查看 Token 来源、吞吐、P95/P99、错误分类与用例明细。</p></div><div><div class="evaluation-detail-actions"><button class="text-button hidden" id="stopEvaluationButton" type="button">安全停止</button><button class="text-button danger hidden" id="deleteEvaluationButton" type="button">删除任务</button><button class="button secondary" id="openEvaluationReportButton" type="button">查看评测报告</button></div><p class="evaluation-artifact-help">报告会解释结论、异常和建议；任务结束后即可生成。</p></div></div>
           <div class="evaluation-progress"><div><span id="evaluationPhaseLabel">尚未选择运行</span><b id="evaluationProgressLabel">0%</b></div><div class="progress-track"><i id="evaluationProgressBar"></i></div></div>
-          <div class="evaluation-metric-grid">
+          <div id="evaluationFullProgress" class="evaluation-full-progress hidden" aria-live="polite"></div><div class="evaluation-metric-grid">
             <div><span>用例达标率</span><strong id="evaluationSuccessRate">—</strong><small id="evaluationQualityScore">质量分 —</small></div>
             <div><span>Token 来源</span><strong id="evaluationTokenSource">—</strong><small id="evaluationTokenCount">总量 —</small></div>
             <div><span>P95 / P99</span><strong id="evaluationLatency">—</strong><small>端到端时延</small></div>
-            <div><span>输出吞吐</span><strong id="evaluationThroughput">—</strong><small>Token / 秒</small></div>
+            <div><span>端到端输出吞吐</span><strong id="evaluationThroughput">—</strong><small>Token / 秒，包含等待</small></div>
             <div><span>鲁棒保持值</span><strong id="evaluationRobustness">—</strong><small>平均 / 最差</small></div>
             <div><span>评分置信度</span><strong id="evaluationScoringConfidence">—</strong><small id="evaluationReviewState">规则 / 裁判 / 人工</small></div>
             <div><span>稳定容量</span><strong id="evaluationCapacity">—</strong><small id="evaluationCapacityState">并发 / 拐点</small></div>
           </div>
           <div class="evaluation-detail-grid">
             <section class="evaluation-events"><header><h4>阶段事件</h4><span id="evaluationEventCount">0 条</span></header><div id="evaluationEventsList" class="evaluation-events-list"><p class="muted">尚未选择运行。</p></div></section>
-            <section class="evaluation-results"><header><h4>结果明细与人工复核</h4><span id="evaluationResultCount">0 条</span></header><div class="table-wrap"><table><thead><tr><th>用例名称</th><th>状态</th><th>Token</th><th>TTFT</th><th>时延</th><th>综合分</th><th>评分来源</th><th>复核</th></tr></thead><tbody id="evaluationResultsBody"></tbody></table></div></section>
+            <section class="evaluation-results"><header><h4>结果明细与人工复核</h4><span id="evaluationResultCount">0 条</span></header><div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="评测结果与复核，可滚动查看"><table><thead><tr><th>用例名称</th><th>状态</th><th>Token</th><th>TTFT</th><th>时延</th><th>综合分</th><th>评分来源</th><th>复核</th></tr></thead><tbody id="evaluationResultsBody"></tbody></table></div><footer class="table-pagination list-pagination" id="evaluationResultsPagination" aria-label="评测结果与复核分页"></footer></section>
           </div>
         </article>
         <section class="evaluation-management-layout hidden" data-workspace-panel="evaluation" data-workspace-name="suites">
@@ -426,26 +430,31 @@
           <article class="panel evaluation-suite-list-panel">
             <div class="panel-head"><div><p class="eyebrow">DATASET LIBRARY</p><h3>内置库与项目库</h3></div><button class="text-button" id="refreshEvaluationSuitesButton" type="button">刷新</button></div>
             <p class="panel-intro">内置测试集只读；可以复制为项目版本。项目测试集支持 JSON、JSONL、CSV、ZIP、TXT、Markdown、DOCX 和 PDF 导入，导入后自动校验并发布不可变版本。</p>
-            <div id="evaluationSuiteList" class="evaluation-suite-list"></div>
+            <div id="evaluationSuiteList" class="evaluation-suite-list paged-scroll" tabindex="0" role="region" aria-label="评测测试集，可滚动查看"></div><footer class="table-pagination list-pagination" id="evaluationSuitesPagination" aria-label="评测测试集分页"></footer>
           </article>
         </section>
+        <dialog id="evaluationSuiteDrawer" class="evaluation-suite-drawer" aria-labelledby="evaluationSuiteDrawerTitle" aria-describedby="evaluationSuiteDrawerSource">
+          <header class="evaluation-suite-drawer-head"><div><p id="evaluationSuiteDrawerSource"></p><h3 id="evaluationSuiteDrawerTitle">测试集详情</h3></div><button type="button" id="closeEvaluationSuiteDrawer" aria-label="关闭测试集详情">×</button></header>
+          <div class="evaluation-suite-drawer-body paged-scroll" id="evaluationSuiteDrawerBody" tabindex="0" role="region" aria-label="测试集用例，可滚动查看"><p id="evaluationSuiteDrawerDescription"></p><section id="evaluationSuiteVersionMeta" class="evaluation-suite-version"></section><h4>测试用例</h4><div id="evaluationSuiteCases" aria-live="polite"></div></div>
+          <footer class="table-pagination list-pagination" id="evaluationSuiteCasesPagination" aria-label="测试集用例分页"></footer>
+        </dialog>
         <article class="panel evaluation-comparison-panel hidden" data-workspace-panel="evaluation" data-workspace-name="comparison">
           <div class="panel-head"><div><p class="eyebrow">MODEL COMPARISON</p><h3>同口径模型对比</h3></div><button class="button primary" id="createEvaluationComparisonButton" type="button">生成对比</button></div>
           <p class="panel-intro">默认只对同测试集哈希、同方案和同参数的已结束任务排名；口径不一致时会先提示，只能确认后并列展示。</p>
-          <div id="evaluationComparisonRunList" class="evaluation-comparison-run-list"></div>
-          <section class="evaluation-comparison-result" id="evaluationComparisonResult"><p class="muted">请选择至少两个已结束运行。</p></section>
+          <div id="evaluationComparisonRunList" class="evaluation-comparison-run-list paged-scroll" tabindex="0" role="region" aria-label="模型对比候选，可滚动查看"></div><footer class="table-pagination list-pagination" id="evaluationComparisonPagination" aria-label="模型对比候选分页"></footer>
+          <section class="evaluation-comparison-result paged-scroll" tabindex="0" role="region" aria-label="模型对比结果，可滚动查看" id="evaluationComparisonResult"><p class="muted">请选择至少两个已结束运行。</p></section><footer class="table-pagination list-pagination" id="evaluationComparisonResultsPagination" aria-label="模型对比结果分页"></footer>
         </article>
         <article class="panel evaluation-report-panel hidden" id="evaluationReportPanel" data-workspace-panel="evaluation" data-workspace-name="report">
-          <div class="panel-head evaluation-report-head"><div><p class="eyebrow">READABLE REPORT</p><h3 id="evaluationReportTitle">选择一条已结束的评测查看报告</h3><p id="evaluationReportMeta">报告会把指标翻译成可阅读的结论，并说明下一步怎么处理。</p></div><div class="evaluation-report-actions"><button class="button secondary" id="downloadEvaluationReportDocxButton" type="button">下载 Word</button><button class="button secondary" id="downloadEvaluationReportPdfButton" type="button">下载 PDF</button></div></div>
+          <div class="panel-head evaluation-report-head"><div><p class="eyebrow">MODEL EVALUATION REPORT</p><h3 id="evaluationReportTitle">选择一条已结束的评测查看报告</h3><p id="evaluationReportMeta">报告包含测试环境、方法、判定依据、全量结果和模型适用性分析。</p></div><div class="evaluation-report-actions"><label class="field evaluation-report-model">综合分析模型<select id="evaluationReportModel"><option value="">使用当前启用的报告模型</option></select></label><button class="button" id="generateEvaluationAnalysisButton" type="button" data-permission="report:manage">生成 AI 综合分析</button><button class="button secondary" id="downloadEvaluationReportDocxButton" type="button">下载 Word</button><button class="button secondary" id="downloadEvaluationReportPdfButton" type="button">下载 PDF</button></div></div>
           <section class="evaluation-report-conclusion info" id="evaluationReportConclusion"><span>结论</span><strong>尚未生成报告</strong><p>请先选择一条已完成、失败或停止的评测任务。</p></section>
-          <div class="evaluation-report-overview" id="evaluationReportOverview"></div>
-          <section class="evaluation-report-section"><header><div><span>01</span><h4>核心指标怎么看</h4></div><p>结果、含义和使用方式放在一起，不需要阅读原始 JSON。</p></header><div class="evaluation-report-metrics" id="evaluationReportMetrics"></div></section>
+          <div class="evaluation-report-overview" id="evaluationReportOverview"></div><div id="evaluationReportContext"></div>
+          <section class="evaluation-report-section"><header><div><span>01</span><h4>测试结果汇总</h4></div><p>各类指标使用独立口径，结合判定标准与业务要求评审。</p></header><div class="evaluation-report-metrics" id="evaluationReportMetrics"></div></section>
           <div class="evaluation-report-columns">
-            <section class="evaluation-report-section"><header><div><span>02</span><h4>发现与解释</h4></div></header><div class="evaluation-report-findings" id="evaluationReportFindings"><p class="muted">暂无内容。</p></div></section>
-            <section class="evaluation-report-section"><header><div><span>03</span><h4>建议下一步</h4></div></header><ol class="evaluation-report-recommendations" id="evaluationReportRecommendations"></ol></section>
+            <section class="evaluation-report-section"><header><div><span>02</span><h4>问题与结果分析</h4></div></header><div class="evaluation-report-findings" id="evaluationReportFindings"><p class="muted">暂无内容。</p></div></section>
+            <section class="evaluation-report-section"><header><div><span>03</span><h4>改进建议与复验要求</h4></div></header><ol class="evaluation-report-recommendations" id="evaluationReportRecommendations"></ol></section>
           </div>
-          <section class="evaluation-report-section"><header><div><span>04</span><h4>用例结果</h4></div><p id="evaluationReportCaseSummary">暂无用例数据</p></header><div class="table-wrap evaluation-report-cases"><table><thead><tr><th>用例</th><th>分类</th><th>状态</th><th>综合分</th><th>时延</th></tr></thead><tbody id="evaluationReportCasesBody"><tr><td class="evaluation-empty-row" colspan="5">尚未生成报告。</td></tr></tbody></table></div><footer class="table-pagination evaluation-report-case-pagination" aria-label="评测报告用例分页"><span id="evaluationReportCasesPageSummary">共 0 条</span><div><button class="text-button" id="evaluationReportCasesPrevButton" type="button">上一页</button><b id="evaluationReportCasesPageIndicator">第 1 / 1 页</b><button class="text-button" id="evaluationReportCasesNextButton" type="button">下一页</button></div></footer></section>
-          <details class="evaluation-technical-artifacts"><summary>技术附件（供开发、复核和二次分析）</summary><div><button class="text-button" id="downloadEvaluationSummaryButton" type="button">评测摘要 JSON</button><button class="text-button" id="downloadEvaluationPerformanceButton" type="button">性能明细 CSV</button></div><p>普通阅读请使用上面的报告；JSON/CSV 保留原始结构，适合程序处理和审计留档。</p></details>
+          <div id="evaluationReportSections"></div><section class="evaluation-report-section"><header><div><span>04</span><h4>用例结果</h4></div><p id="evaluationReportCaseSummary">暂无用例数据</p></header><div class="table-wrap evaluation-report-cases paged-scroll" tabindex="0" role="region" aria-label="评测报告用例，可滚动查看"><table><thead><tr><th>用例</th><th>分类</th><th>状态</th><th>综合分</th><th>时延</th></tr></thead><tbody id="evaluationReportCasesBody"><tr><td class="evaluation-empty-row" colspan="5">尚未生成报告。</td></tr></tbody></table></div><footer class="table-pagination evaluation-report-case-pagination list-pagination" id="evaluationReportCasesPagination" aria-label="评测报告用例分页"></footer></section>
+          <details class="evaluation-technical-artifacts"><summary>技术附件（供开发、复核和二次分析）</summary><div><button class="text-button" id="downloadEvaluationEvidenceButton" type="button">全量证据包 ZIP</button><button class="text-button" id="downloadEvaluationSummaryButton" type="button">评测摘要 JSON</button><button class="text-button" id="downloadEvaluationPerformanceButton" type="button">性能明细 CSV</button></div><p>普通阅读请使用上面的报告；JSON/CSV 保留原始结构，适合程序处理和审计留档。</p></details>
         </article>
         <dialog class="modal evaluation-review-dialog" id="evaluationReviewDialog"><form method="dialog" id="evaluationReviewForm"><div class="modal-head"><div><p class="eyebrow">HUMAN REVIEW</p><h3 id="evaluationReviewTitle">人工复核</h3></div><button type="button" class="icon-button" data-evaluation-review-close aria-label="关闭">×</button></div><input type="hidden" id="evaluationReviewResultId"><label class="field"><span>人工评分（0～100）</span><input id="evaluationReviewScore" type="number" min="0" max="100" step="1" value="80" required></label><label class="field"><span>复核意见</span><textarea id="evaluationReviewComment" rows="5" maxlength="4000" placeholder="说明事实错误、评分依据或通过理由"></textarea></label><div class="dialog-actions"><button type="button" class="button secondary" data-evaluation-review-close>取消</button><button type="submit" class="button primary">保存复核</button></div><p class="form-error" id="evaluationReviewError"></p></form></dialog>
       </section>
@@ -454,11 +463,11 @@
         <div class="page-grid form-layout">
           <form class="panel" id="modelForm"><div class="panel-head"><div><p class="eyebrow">MODEL REGISTRY</p><h3>模型配置</h3></div><span class="secure-badge">密文存储</span></div><input type="hidden" id="modelId"><div class="form-grid two"><label class="field"><span>配置名称</span><input id="modelName" placeholder="生产报告模型" required></label><label class="field"><span>供应商协议</span><select id="modelProvider"><option value="openai-compatible">OpenAI Compatible</option></select></label></div><label class="field"><span>Base URL</span><input id="modelBaseUrl" type="url" placeholder="https://api.example.com/v1" required></label><div class="form-grid two"><label class="field"><span>模型名称</span><input id="modelModelName" placeholder="deepseek-chat" required></label><label class="field"><span>API Key</span><input id="modelApiKey" type="password" autocomplete="new-password" placeholder="更新时留空代表保持原 Key"></label></div><div class="form-grid two"><label class="field"><span>Temperature</span><input id="modelTemperature" type="number" min="0" max="2" step="0.1" value="0.3"></label><label class="field"><span>最大 Tokens</span><input id="modelMaxTokens" type="number" min="64" max="128000" value="2000"></label></div><label class="field"><span>系统提示词</span><textarea id="modelPrompt" rows="4" placeholder="你是企业软件测试报告助手。"></textarea></label><label class="switch-row"><input id="modelActive" type="checkbox" checked><span><b>保存后设为启用模型</b><small>同一时间只会有一个启用中的模型。</small></span></label><button class="button primary wide" type="submit">保存模型配置</button><p class="form-error" id="modelFormError"></p></form>
           <aside class="model-sidebar">
-            <section class="security-note" aria-labelledby="modelSecurityTitle">
-              <div class="security-note-head">
+            <details class="security-note" aria-labelledby="modelSecurityTitle">
+              <summary class="security-note-head">
                 <span class="security-note-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 20 6v5c0 4.8-3.1 8.1-8 10-4.9-1.9-8-5.2-8-10V6l8-3Z"/><path d="m8.5 12 2.2 2.2 4.8-5"/></svg></span>
                 <div><p class="eyebrow">SECRET PROTECTION</p><h3 id="modelSecurityTitle">API Key 安全保护</h3></div>
-              </div>
+              </summary>
               <p class="security-lead">密钥不会写入 yml、任务日志或列表响应。保存后由服务端加密托管，页面不再回显原文。</p>
               <div class="security-flow">
                 <div><span>01</span><p><strong>安全提交</strong><small>使用密码输入框；编辑配置时留空即可保留原 Key。</small></p></div>
@@ -466,10 +475,10 @@
                 <div><span>03</span><p><strong>按需解密</strong><small>仅在后端调用模型时短暂解密，接口只返回配置状态。</small></p></div>
               </div>
               <div class="security-foot"><i></i><span><b>保护状态</b> 服务端加密已启用</span></div>
-            </section>
+            </details>
             <section class="panel model-list-panel">
               <div class="panel-head"><div><p class="eyebrow">REGISTERED MODELS</p><h3>已配置模型</h3></div><span class="model-count" id="modelCount">0 项</span></div>
-              <div class="model-list" id="modelList"></div>
+              <div class="model-list paged-scroll" id="modelList" tabindex="0" role="region" aria-label="模型配置列表，可滚动查看"></div><footer class="table-pagination list-pagination" id="modelsPagination" aria-label="模型配置列表分页"></footer>
             </section>
           </aside>
         </div>
@@ -512,7 +521,7 @@
                   <label class="field"><span>运行环境</span><select id="interfaceEnvironmentFilter"><option value="">全部环境</option></select></label>
                   <button class="button secondary" id="refreshInterfacesButton" type="button">刷新</button>
                 </div>
-                <div class="table-wrap"><table class="interface-asset-table"><thead><tr><th>接口</th><th>模块</th><th>请求</th><th>环境</th><th>版本</th><th>状态</th><th>操作</th></tr></thead><tbody id="interfaceBody"></tbody></table></div>
+                <div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="接口目录，可滚动查看"><table class="interface-asset-table"><thead><tr><th>接口</th><th>模块</th><th>请求</th><th>环境</th><th>版本</th><th>状态</th><th>操作</th></tr></thead><tbody id="interfaceBody"></tbody></table></div><footer class="table-pagination list-pagination" id="interfaceAssetsPagination" aria-label="接口目录分页"></footer>
               </div>
               <section class="interface-editor-view hidden" id="interfaceEditorView">
                 <form id="interfaceAssetForm">
@@ -578,8 +587,8 @@
                 <div class="interface-scenario-head-actions"><button class="button secondary interface-execute" id="batchRunInterfaceScenariosButton" type="button" disabled>批量运行</button><button class="button primary interface-manage" id="newInterfaceScenarioButton" type="button">＋ 新建场景</button></div>
               </header>
               <div class="interface-scenario-summary"><span><b id="interfaceScenarioCount">0</b> 个场景</span><span><b id="interfaceScenarioSelectedCount">0</b> 个已选择</span><span>批量执行并发上限 <b>5</b></span></div>
-              <div class="table-wrap"><table class="interface-scenario-table"><thead><tr><th><input id="interfaceScenarioSelectAll" type="checkbox" aria-label="选择全部场景"></th><th>场景</th><th>环境</th><th>步骤</th><th>最近执行</th><th>操作</th></tr></thead><tbody id="interfaceScenarioBody"></tbody></table></div>
-              <section class="interface-scenario-history"><div class="panel-head"><div><p class="eyebrow">RECENT RUNS</p><h3>最近场景执行</h3></div><span id="interfaceScenarioRunCount">0 条</span></div><div class="table-wrap"><table><thead><tr><th>执行时间</th><th>场景</th><th>结果</th><th>步骤</th><th>耗时</th><th>报告</th></tr></thead><tbody id="interfaceScenarioRunBody"></tbody></table></div></section>
+              <div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="接口场景，可滚动查看"><table class="interface-scenario-table"><thead><tr><th><input id="interfaceScenarioSelectAll" type="checkbox" aria-label="选择本页场景"></th><th>场景</th><th>环境</th><th>步骤</th><th>最近执行</th><th>操作</th></tr></thead><tbody id="interfaceScenarioBody"></tbody></table></div><footer class="table-pagination list-pagination" id="interfaceScenariosPagination" aria-label="接口场景分页"></footer>
+              <section class="interface-scenario-history"><div class="panel-head"><div><p class="eyebrow">RECENT RUNS</p><h3>最近场景执行</h3></div><span id="interfaceScenarioRunCount">0 条</span></div><div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="场景执行报告，可滚动查看"><table><thead><tr><th>执行时间</th><th>场景</th><th>结果</th><th>步骤</th><th>耗时</th><th>报告</th></tr></thead><tbody id="interfaceScenarioRunBody"></tbody></table></div><footer class="table-pagination list-pagination" id="interfaceScenarioRunsPagination" aria-label="场景执行报告分页"></footer></section>
             </div>
             <section class="interface-scenario-editor hidden" id="interfaceScenarioEditor">
               <form id="interfaceScenarioForm">
@@ -600,19 +609,19 @@
           <div class="interface-settings-grid">
             <article class="panel">
               <div class="panel-head"><div><p class="eyebrow">RUNTIME TARGETS</p><h3>运行环境</h3></div><button class="button primary interface-manage" id="newInterfaceEnvironmentButton" type="button">新建环境</button></div>
-              <div class="interface-environment-list" id="interfaceEnvironmentList"></div>
+              <div class="interface-environment-list paged-scroll" id="interfaceEnvironmentList" tabindex="0" role="region" aria-label="运行环境，可滚动查看"></div><footer class="table-pagination list-pagination" id="interfaceEnvironmentsPagination" aria-label="运行环境分页"></footer>
             </article>
             <article class="panel interface-variable-panel">
               <div class="panel-head"><div><p class="eyebrow">SAFE PARAMETERS</p><h3>变量与密钥引用</h3></div><button class="button primary interface-manage" id="newInterfaceVariableButton" type="button">新建变量</button></div>
               <div class="callout interface-variable-note"><strong>引用方式</strong><p>在请求定义中使用 <code>{{VARIABLE_NAME}}</code>。密钥值仅加密保存，列表和审计记录不会返回明文。</p></div>
-              <div class="table-wrap"><table><thead><tr><th>变量名</th><th>作用域</th><th>类型</th><th>值状态</th><th>说明</th><th>操作</th></tr></thead><tbody id="interfaceVariableBody"></tbody></table></div>
+              <div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="变量列表，可滚动查看"><table><thead><tr><th>变量名</th><th>作用域</th><th>类型</th><th>值状态</th><th>说明</th><th>操作</th></tr></thead><tbody id="interfaceVariableBody"></tbody></table></div><footer class="table-pagination list-pagination" id="interfaceVariablesPagination" aria-label="变量列表分页"></footer>
             </article>
           </div>
         </div>
 
         <div class="hidden" data-workspace-panel="interfaces" data-workspace-name="import">
           <div class="page-grid form-layout">
-            <form class="panel" id="interfaceForm"><div class="panel-head"><div><p class="eyebrow">VERSIONED CONTRACT</p><h3>导入接口定义</h3></div><span class="step-chip">JSON / YAML / OpenAPI / cURL</span></div><div class="form-grid two"><label class="field"><span>接口名称</span><input id="interfaceName" placeholder="例如：内网 LMT 翻译" required></label><label class="field"><span>归属模块</span><select id="interfaceImportModule"><option value="">未分组</option></select></label><label class="field"><span>运行环境</span><select id="interfaceImportEnvironment"><option value="">不绑定环境</option></select></label></div><label class="field"><span>接口内容</span><textarea id="interfaceContent" class="code-input" rows="15" placeholder='{"method":"POST","url":"http://172.16.102.91:8036/v3/translate_a"}' required></textarea></label><label class="switch-row"><input id="interfacePublish" type="checkbox"><span><b>导入后发布当前版本</b><small>不勾选时保存为草稿，可继续编辑后再发布。</small></span></label><button class="button primary wide" type="submit">解析并创建接口</button></form>
+            <form class="panel" id="interfaceForm"><div class="panel-head"><div><p class="eyebrow">VERSIONED CONTRACT</p><h3>导入接口定义</h3></div><span class="step-chip">JSON / YAML / OpenAPI / cURL</span></div><div class="form-grid two"><label class="field"><span>接口名称</span><input id="interfaceName" placeholder="例如：内网 LMT 翻译" required></label><label class="field"><span>归属模块</span><select id="interfaceImportModule"><option value="">未分组</option></select></label><label class="field"><span>运行环境</span><select id="interfaceImportEnvironment"><option value="">不绑定环境</option></select></label></div><label class="field"><span>接口内容</span><textarea id="interfaceContent" class="code-input" rows="15" placeholder='{"method":"POST","url":"https://api.example.test/v1/translate"}' required></textarea></label><label class="switch-row"><input id="interfacePublish" type="checkbox"><span><b>导入后发布当前版本</b><small>不勾选时保存为草稿，可继续编辑后再发布。</small></span></label><button class="button primary wide" type="submit">解析并创建接口</button></form>
             <aside class="panel"><p class="eyebrow">GUARDRAILS</p><h3>安全自适应边界</h3><div class="guardrail"><b>可自适应</b><span>协议、主机、端口、HTTP 方法、URL path</span></div><div class="guardrail"><b>项目隔离</b><span>导入结果只进入当前项目，模块与环境引用不能跨项目</span></div><div class="guardrail"><b>不会执行</b><span>粘贴内容中的脚本、Shell 或任意 Python</span></div><div class="callout"><strong>推荐上线流程</strong><p>先保存草稿，在预生产完成连通性与契约测试后，再发布版本。历史版本保持只读。</p></div></aside>
           </div>
         </div>
@@ -625,8 +634,8 @@
 
         <dialog class="interface-dialog compact" id="interfaceVariableDialog"><form id="interfaceVariableForm"><div class="dialog-head"><div><p class="eyebrow">SAFE PARAMETER</p><h3 id="interfaceVariableDialogTitle">新建变量</h3></div><button class="dialog-close" type="button" data-interface-dialog-close="interfaceVariableDialog" aria-label="关闭">×</button></div><input id="interfaceVariableId" type="hidden"><label class="field"><span>变量名</span><input id="interfaceVariableKey" required maxlength="128" placeholder="例如：ACCESS_TOKEN"></label><label class="field"><span>作用域</span><select id="interfaceVariableEnvironment"><option value="">项目通用</option></select></label><label class="switch-row"><input id="interfaceVariableSecret" type="checkbox"><span><b>作为密钥加密保存</b><small>密钥值保存后不可查看，编辑时留空表示保留原值。</small></span></label><label class="field"><span id="interfaceVariableValueLabel">变量值</span><input id="interfaceVariableValue" maxlength="20000" autocomplete="off"></label><label class="field"><span>说明</span><textarea id="interfaceVariableDescription" rows="3" maxlength="1000"></textarea></label><div class="dialog-actions"><button class="button secondary" type="button" data-interface-dialog-close="interfaceVariableDialog">取消</button><button class="button primary" type="submit">保存变量</button></div></form></dialog>
 
-        <dialog class="interface-dialog" id="interfaceVersionsDialog"><div class="dialog-head"><div><p class="eyebrow">IMMUTABLE HISTORY</p><h3 id="interfaceVersionsTitle">版本历史</h3></div><button class="dialog-close" type="button" data-interface-dialog-close="interfaceVersionsDialog" aria-label="关闭">×</button></div><div class="interface-version-list" id="interfaceVersionList"></div></dialog>
-        <dialog class="interface-dialog interface-scenario-run-dialog" id="interfaceScenarioRunDialog"><div class="dialog-head"><div><p class="eyebrow">EXECUTION RESULT</p><h3 id="interfaceScenarioRunTitle">场景执行结果</h3></div><button class="dialog-close" type="button" data-interface-dialog-close="interfaceScenarioRunDialog" aria-label="关闭">×</button></div><div class="interface-scenario-run-detail" id="interfaceScenarioRunDetail"></div></dialog>
+        <dialog class="interface-dialog" id="interfaceVersionsDialog"><div class="dialog-head"><div><p class="eyebrow">IMMUTABLE HISTORY</p><h3 id="interfaceVersionsTitle">版本历史</h3></div><button class="dialog-close" type="button" data-interface-dialog-close="interfaceVersionsDialog" aria-label="关闭">×</button></div><div class="interface-version-list paged-scroll" id="interfaceVersionList" tabindex="0" role="region" aria-label="接口版本，可滚动查看"></div><footer class="table-pagination list-pagination" id="interfaceVersionsPagination" aria-label="接口版本分页"></footer></dialog>
+        <dialog class="interface-dialog interface-scenario-run-dialog" id="interfaceScenarioRunDialog"><div class="dialog-head"><div><p class="eyebrow">EXECUTION RESULT</p><h3 id="interfaceScenarioRunTitle">场景执行结果</h3></div><button class="dialog-close" type="button" data-interface-dialog-close="interfaceScenarioRunDialog" aria-label="关闭">×</button></div><div class="interface-scenario-run-detail paged-scroll" id="interfaceScenarioRunDetail" tabindex="0" role="region" aria-label="场景报告步骤，可滚动查看"></div><footer class="table-pagination list-pagination" id="scenarioStepsPagination" aria-label="场景报告步骤分页"></footer></dialog>
       </section>
 
       <section class="view" id="view-identity">
@@ -651,8 +660,8 @@
               <button class="button ghost" id="resetIdentityUserFilters" type="button">重置</button>
               <span class="identity-toolbar-note">停用账号会立即撤销其全部登录会话</span>
             </div>
-            <div class="table-wrap"><table><thead><tr><th>用户</th><th>平台角色</th><th>状态</th><th>最近登录</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="identityUsersBody"></tbody></table></div>
-            <footer class="table-pagination" aria-label="用户列表分页"><span id="identityUsersPageSummary">共 0 条</span><div><button class="text-button" id="identityUsersPrevButton" type="button">上一页</button><b id="identityUsersPageIndicator">第 1 / 1 页</b><button class="text-button" id="identityUsersNextButton" type="button">下一页</button></div></footer>
+            <div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="用户列表，可滚动查看"><table><thead><tr><th>用户</th><th>平台角色</th><th>状态</th><th>最近登录</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="identityUsersBody"></tbody></table></div>
+            <footer class="table-pagination list-pagination" id="identityUsersPagination" aria-label="用户列表分页"></footer>
           </article>
         </div>
 
@@ -664,8 +673,8 @@
               <button class="button ghost" id="resetIdentityProjectFilters" type="button">重置</button>
               <span class="identity-toolbar-note">项目成员按只读、执行和管理三类角色授权</span>
             </div>
-            <div class="table-wrap"><table><thead><tr><th>项目空间</th><th>项目标识</th><th>状态</th><th>最近更新</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="identityProjectsBody"></tbody></table></div>
-            <footer class="table-pagination" aria-label="项目列表分页"><span id="identityProjectsPageSummary">共 0 条</span><div><button class="text-button" id="identityProjectsPrevButton" type="button">上一页</button><b id="identityProjectsPageIndicator">第 1 / 1 页</b><button class="text-button" id="identityProjectsNextButton" type="button">下一页</button></div></footer>
+            <div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="项目列表，可滚动查看"><table><thead><tr><th>项目空间</th><th>项目标识</th><th>状态</th><th>最近更新</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="identityProjectsBody"></tbody></table></div>
+            <footer class="table-pagination list-pagination" id="identityProjectsPagination" aria-label="项目列表分页"></footer>
           </article>
         </div>
 
@@ -676,16 +685,16 @@
               <button class="button ghost" id="resetIdentityRoleFilters" type="button">重置</button>
               <span class="identity-toolbar-note">固定角色由平台定义，用于保持各项目授权口径一致</span>
             </div>
-            <div class="table-wrap"><table class="identity-role-table"><thead><tr><th>角色名称</th><th>角色编码</th><th>权限范围</th><th>适用边界</th></tr></thead><tbody id="identityRoleMatrix"></tbody></table></div>
-            <footer class="table-pagination" aria-label="角色列表分页"><span id="identityRolesPageSummary">共 0 条</span><div><button class="text-button" id="identityRolesPrevButton" type="button">上一页</button><b id="identityRolesPageIndicator">第 1 / 1 页</b><button class="text-button" id="identityRolesNextButton" type="button">下一页</button></div></footer>
+            <div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="角色列表，可滚动查看"><table class="identity-role-table"><thead><tr><th>角色名称</th><th>角色编码</th><th>权限范围</th><th>适用边界</th></tr></thead><tbody id="identityRoleMatrix"></tbody></table></div>
+            <footer class="table-pagination list-pagination" id="identityRolesPagination" aria-label="角色列表分页"></footer>
           </article>
         </div>
 
         <div class="identity-tab-panel" data-identity-panel="audit" role="tabpanel">
           <article class="panel identity-directory-panel">
             <div class="identity-filter-toolbar compact audit"><div class="identity-audit-intro"><strong>安全操作记录</strong><span>按时间倒序保存账号、项目和权限变更，便于追溯。</span></div><button class="button ghost" id="refreshAuditButton" type="button">刷新日志</button></div>
-            <div class="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>项目</th><th>动作</th><th>结果</th><th>目标</th></tr></thead><tbody id="identityAuditBody"></tbody></table></div>
-            <footer class="table-pagination" aria-label="审计记录分页"><span id="identityAuditPageSummary">共 0 条</span><div><button class="text-button" id="identityAuditPrevButton" type="button">上一页</button><b id="identityAuditPageIndicator">第 1 / 1 页</b><button class="text-button" id="identityAuditNextButton" type="button">下一页</button></div></footer>
+            <div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="审计记录，可滚动查看"><table><thead><tr><th>时间</th><th>操作者</th><th>项目</th><th>动作</th><th>结果</th><th>目标</th></tr></thead><tbody id="identityAuditBody"></tbody></table></div>
+            <footer class="table-pagination list-pagination" id="identityAuditPagination" aria-label="审计记录分页"></footer>
           </article>
         </div>
 
@@ -707,12 +716,12 @@
 
         <dialog class="identity-drawer identity-member-drawer" id="identityMembershipDrawer">
           <div class="identity-drawer-head"><div><span>项目授权</span><h3>项目成员与角色</h3><p>同一用户在不同项目中可以拥有不同角色。</p></div><button type="button" data-identity-close="identityMembershipDrawer" aria-label="关闭">×</button></div>
-          <div class="identity-drawer-body"><label class="field"><span>管理项目</span><select id="membershipProjectSelect"></select></label><form class="membership-toolbar" id="membershipForm"><label class="field"><span>选择用户</span><select id="membershipUserSelect" required></select></label><label class="field"><span>项目角色</span><select id="membershipRoleSelect"><option value="viewer">只读成员</option><option value="tester">测试执行者</option><option value="project_admin">项目管理员</option></select></label><button class="button secondary" type="submit">保存成员权限</button></form><div class="identity-member-list"><div class="identity-member-list-head"><strong>已授权成员</strong><span id="identityMemberCount">0 人</span></div><div class="table-wrap"><table><thead><tr><th>成员</th><th>项目角色</th><th>状态</th><th>操作</th></tr></thead><tbody id="identityMembersBody"></tbody></table></div></div></div>
+          <div class="identity-drawer-body"><label class="field"><span>管理项目</span><select id="membershipProjectSelect"></select></label><form class="membership-toolbar" id="membershipForm"><label class="field"><span>选择用户</span><select id="membershipUserSelect" required></select></label><label class="field"><span>项目角色</span><select id="membershipRoleSelect"><option value="viewer">只读成员</option><option value="tester">测试执行者</option><option value="project_admin">项目管理员</option></select></label><button class="button secondary" type="submit">保存成员权限</button></form><div class="identity-member-list"><div class="identity-member-list-head"><strong>已授权成员</strong><span id="identityMemberCount">0 人</span></div><div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="项目成员，可滚动查看"><table><thead><tr><th>成员</th><th>项目角色</th><th>状态</th><th>操作</th></tr></thead><tbody id="identityMembersBody"></tbody></table></div><footer class="table-pagination list-pagination" id="identityMembersPagination" aria-label="项目成员分页"></footer></div></div>
         </dialog>
       </section>
     </main>
   </div>
   <div id="toastArea" class="toast-area"></div>
-  <script src="/static/app.js?v=20260902.9" defer></script>
+  <script src="/static/app.js?v=20260910.4" defer></script>
 </body>
 </html>

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
@@ -13,6 +13,7 @@ from auto_test.reporting.font_support import configure_matplotlib_cjk
 
 
 REPORT_TITLE = "模型评测报告"
+REPORT_TIMEZONE = timezone(timedelta(hours=8))
 REPORT_BUILD_LOCK = threading.Lock()
 ACCENT = "256F9C"
 INK = "17212B"
@@ -38,14 +39,14 @@ def _int(value: Any) -> int:
 
 def _time_text(value: Any) -> str:
     try:
-        return datetime.fromtimestamp(float(value)).strftime("%Y-%m-%d %H:%M:%S")
+        return datetime.fromtimestamp(float(value), REPORT_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S UTC+08:00")
     except (TypeError, ValueError, OSError):
         return "—"
 
 
 def _report_number(run: dict[str, Any]) -> str:
     try:
-        value = datetime.fromtimestamp(float(run.get("created_at")))
+        value = datetime.fromtimestamp(float(run.get("created_at")), REPORT_TIMEZONE)
         return value.strftime("ME-%Y%m%d-%H%M%S")
     except (TypeError, ValueError, OSError):
         return "ME-UNASSIGNED"
@@ -184,6 +185,12 @@ def _conclusion(
             "title": "并发性能样本已完成",
             "summary": f"本轮请求成功率为 {_percent(success)}。吞吐和时延需结合业务 SLA 与部署资源判断，本报告不使用通用阈值代替业务验收标准。",
         }
+    if run_kind in {"standard_benchmark", "wmt_translation"}:
+        return {
+            "level": "info",
+            "title": "标准评测样本已执行",
+            "summary": f"本轮请求成功率为 {_percent(success)}，数据集指标得分为 {_percent(quality)}。请求成功只代表接口完成响应；模型能力应按数据集指标和样本规模判断。",
+        }
     if success is not None and success >= 95 and (quality is None or quality >= 80):
         return {
             "level": "good",
@@ -211,6 +218,16 @@ def build_model_evaluation_report(
     snapshot = dict(run.get("snapshot") or {})
     summary = dict(run.get("summary") or {})
     performance = dict(summary.get("performance") or {})
+    stages = list(performance.get("stages") or [])
+    # Older persisted results sorted mixed phases by load; restore actual
+    # execution order for reports without changing historical measurements.
+    remaining, ordered = list(stages), []
+    for window in (summary.get("performance_execution") or {}).get("stages", []):
+        match = next((item for item in remaining if item.get("evaluation_stage") == window.get("evaluation_stage") and item.get("phase", "capacity") == window.get("phase") and item.get("concurrency") == window.get("parallel") and (item.get("target_rps") == window.get("rate") or item.get("target_rps") is None and window.get("rate") == -1)), None)
+        if match is not None:
+            ordered.append(match)
+            remaining.remove(match)
+    stages = ordered + remaining
     token = dict(summary.get("token_usage") or {})
     robustness = dict(summary.get("robustness") or {})
     scoring = dict(summary.get("scoring") or {})
@@ -220,7 +237,7 @@ def build_model_evaluation_report(
     model = dict(snapshot.get("model") or {})
     suite = dict(snapshot.get("suite") or {})
     run_kind = str(snapshot.get("run_kind") or summary.get("mode") or "")
-    performance_run = run_kind in {"concurrency", "deep_performance"}
+    performance_run = run_kind in {"concurrency", "deep_performance", "standard_benchmark", "wmt_translation"}
     catalog = _case_catalog(snapshot)
     rows: list[dict[str, Any]] = []
     for index, item in enumerate(results, start=1):
@@ -241,7 +258,7 @@ def build_model_evaluation_report(
                 "status_text": _case_status_text(item.get("status")),
                 "score": round(raw_score * 100, 2) if raw_score is not None else None,
                 "latency_ms": _number(metrics.get("latency_ms")),
-                "ttft_ms": _number(metrics.get("ttft_ms")),
+                "ttft_ms": _number(metrics.get("ttft_ms")) if (metrics.get("stream") if run_kind == "full" else (snapshot.get("parameters") or {}).get("stream", (snapshot.get("task_config") or {}).get("stream"))) else None,
                 "total_tokens": _int(
                     metrics.get("total_tokens")
                     if metrics.get("total_tokens") is not None
@@ -256,11 +273,11 @@ def build_model_evaluation_report(
             }
         )
 
-    total = _int(summary.get("total_cases")) or len(rows)
-    passed = _int(summary.get("passed_cases")) or sum(
+    total = _int(summary.get("total_requests") if run_kind in {"concurrency", "deep_performance"} else summary.get("total_cases")) or len(rows)
+    passed = _int(summary.get("successful_requests") if run_kind in {"concurrency", "deep_performance"} else summary.get("passed_cases")) or sum(
         1 for item in rows if item["status"] == "passed"
     )
-    failed = _int(summary.get("failed_cases")) or sum(
+    failed = _int(summary.get("failed_requests") if run_kind in {"concurrency", "deep_performance"} else summary.get("failed_cases")) or sum(
         1 for item in rows if item["status"] == "failed"
     )
     errored = _int(summary.get("error_cases")) or sum(
@@ -273,6 +290,7 @@ def build_model_evaluation_report(
         "local_tokenizer": "本地 Tokenizer",
         "estimated": "估算",
         "unknown": "来源未知",
+        "backend_reported": "后端汇总计数（未逐请求核验）",
     }
     source_counts = dict(token.get("source_counts") or {})
     source_text = " / ".join(
@@ -308,9 +326,9 @@ def build_model_evaluation_report(
         },
         {
             "key": "throughput",
-            "label": "平均输出吞吐",
+            "label": "端到端输出吞吐",
             "value": _metric(performance.get("output_tokens_per_second"), " Token/s", 2),
-            "explanation": "反映模型生成阶段的平均速度，会受模型、硬件、网络和输出长度影响。",
+            "explanation": "包含排队、网络和首字等待；原生评测按单请求输出 Token/总耗时取平均，并发评测按总输出/阶段耗时计算，不是纯解码速度。",
             "assessment": "性能参考",
         },
         {
@@ -338,6 +356,8 @@ def build_model_evaluation_report(
             "key": "capacity",
             "label": "稳定容量 / 拐点",
             "value": (
+                f"{_metric(capacity.get('max_stable_rps'), ' RPS')} / 拐点 {_metric((capacity.get('capacity_knee') or {}).get('target_rps'), ' RPS')}"
+                if capacity.get("max_stable_rps") is not None else
                 f"并发 {capacity.get('max_stable_concurrency') or '—'} / "
                 f"{(capacity.get('capacity_knee') or {}).get('concurrency') or '未出现'}"
             ),
@@ -413,6 +433,10 @@ def build_model_evaluation_report(
                 "detail": str(resource_correlation.get("note") or "未取得同时间窗服务器资源样本。"),
             }
         )
+    elif resource_correlation.get("available"):
+        labels = {"cpu_percent": "CPU", "gpu_percent": "GPU", "memory_percent": "内存", "gpu_memory_percent": "显存"}
+        coefficients = resource_correlation.get("throughput_correlations") or {}
+        findings.append({"level": "info", "title": "同阶段资源关联", "detail": f"服务器 {resource_correlation.get('server_name') or '已绑定主机'}，原始采样 {resource_correlation.get('observation_count') or 0} 点；吞吐相关系数：" + "、".join(f"{labels[key]} {_metric(value)}" for key, value in coefficients.items() if key in labels) + "。范围为该主机全部设备，可能含其他业务负载；相关不等于因果。"})
     if not findings:
         findings.append(
             {"level": "info", "title": "暂无可解释指标", "detail": "当前任务未产生足够的汇总数据。"}
@@ -431,7 +455,7 @@ def build_model_evaluation_report(
     if pending_review:
         recommendations.append("在任务详情中对低分、争议和开放式样本完成人工复核，复核意见会写回质量分和报告。")
 
-    return {
+    report = {
         "schema_version": "1.0",
         "title": REPORT_TITLE,
         "report_number": _report_number(run),
@@ -460,15 +484,35 @@ def build_model_evaluation_report(
         "scoring": scoring,
         "capacity": capacity,
         "resource_correlation": resource_correlation,
+        "performance_stages": stages,
+        "performance_rows": [
+            [
+                {"capacity": "容量阶梯", "burst": "突发", "sustained": "持续", "recovery": "恢复探测"}.get(stage.get("phase"), "容量阶梯"),
+                (f"{stage['target_rps']} RPS / 并发 {stage['concurrency']}" if stage.get("target_rps") is not None else f"并发 {stage.get('concurrency') or '—'}"),
+                f"{stage.get('successful_requests') or 0}/{stage.get('total_requests') or 0}",
+                _metric(stage.get("request_throughput")),
+                _metric(stage.get("latency_p95_ms")),
+            ]
+            for stage in stages
+        ],
+        "performance_execution": dict(summary.get("performance_execution") or {}),
         "findings": findings,
         "recommendations": recommendations,
         "cases": rows,
         "notes": [
             "本报告根据当前测试集、运行参数和已持久化结果自动生成。",
+            ("素材来源：平台合成样例；WMT/Benchmark 名称表示执行适配器，不代表完整官方数据集成绩。" if (suite.get("manifest") or {}).get("license") == "platform_synthetic" else "素材来源与版本以运行的不可变测试集快照为准。"),
+            (f"测试集版本 {suite.get('version') or '—'}；本轮记录 {total} 次请求、{len(stages)} 个性能阶段，明细按实际执行顺序排列。" if stages else f"测试集版本 {suite.get('version') or '—'}；本轮已记录 {len(rows)} 条用例。分类数量：" + "、".join(f"{category} {sum(row['category'] == category for row in rows)} 条" for category in sorted({row['category'] for row in rows}))),
+            "首字延迟仅适用于流式响应；非流式只能观测完整响应耗时。估算 Token 仅供趋势参考，不能作为精确计费数据。",
             "报告中的关注线用于辅助阅读，项目正式验收应以业务方批准的 SLA 和质量门槛为准。",
             "JSON 与 CSV 属于技术附件，供复核、二次分析和审计追踪使用。",
         ],
     }
+    if run_kind == "full":
+        from auto_test.reporting.model_evaluation_full import extend_full_report
+        report = extend_full_report(report, run, results)
+    from auto_test.reporting.model_assessment import formalize_report
+    return formalize_report(report, run, results)
 
 
 def _set_docx_cell_shading(cell, fill: str) -> None:
@@ -566,6 +610,11 @@ def _configure_docx(document) -> None:
         style._element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
         style.font.size = Pt(size)
         style.font.color.rgb = RGBColor.from_string(color)
+        if style_name in {"Title", "Subtitle"}:
+            style.font.italic = False
+            style.font.underline = False
+            for border in style._element.xpath("./w:pPr/w:pBdr"):
+                border.getparent().remove(border)
         style.paragraph_format.space_before = Pt(before)
         style.paragraph_format.space_after = Pt(after)
         style.paragraph_format.line_spacing = 1.10
@@ -580,7 +629,8 @@ def _configure_docx(document) -> None:
 
 
 def _docx_table(document, headers: tuple[str, ...], rows: list[tuple[Any, ...]], widths: tuple[int, ...]):
-    from docx.shared import RGBColor
+    from docx.oxml import OxmlElement
+    from docx.shared import Pt, RGBColor
 
     table = document.add_table(rows=1, cols=len(headers))
     table.style = "Table Grid"
@@ -588,6 +638,7 @@ def _docx_table(document, headers: tuple[str, ...], rows: list[tuple[Any, ...]],
     for index, label in enumerate(headers):
         cell = table.rows[0].cells[index]
         cell.text = label
+        cell.paragraphs[0].paragraph_format.keep_with_next = True
         _set_docx_cell_shading(cell, LIGHT)
         for run in cell.paragraphs[0].runs:
             run.bold = True
@@ -597,6 +648,14 @@ def _docx_table(document, headers: tuple[str, ...], rows: list[tuple[Any, ...]],
         for index, value in enumerate(row):
             cells[index].text = str(value if value not in (None, "") else "—")
     _set_docx_table_geometry(table, widths)
+    for row in table.rows:
+        row._tr.get_or_add_trPr().append(OxmlElement("w:cantSplit"))
+        for cell in row.cells:
+            for paragraph in cell.paragraphs:
+                paragraph.paragraph_format.space_after = Pt(2)
+                paragraph.paragraph_format.line_spacing = 1.05
+                for run in paragraph.runs:
+                    run.font.size = Pt(10)
     return table
 
 
@@ -624,11 +683,12 @@ def _build_chart(report: dict[str, Any], output_path: Path) -> None:
     else:
         axes[0].text(0.5, 0.5, "暂无质量指标", ha="center", va="center", color="#64727D")
         axes[0].set_axis_off()
-    case_labels = ["达标", "未达标", "执行异常"]
+    request_counts = report["run_kind"] in {"concurrency", "deep_performance", "standard_benchmark", "wmt_translation"}
+    case_labels = ["成功", "失败", "执行异常"] if request_counts else ["达标", "未达标", "执行异常"]
     case_values = [counts["passed"], counts["failed"], counts["error"]]
     bars = axes[1].bar(case_labels, case_values, color=["#48B79B", "#E0A82E", "#D65D5D"])
-    axes[1].set_ylabel("用例数")
-    axes[1].set_title(f"共 {counts['total']} 条样本")
+    axes[1].set_ylabel("请求数" if request_counts else "用例数")
+    axes[1].set_title(("原生质量：" if report["run_kind"] == "full" else "") + f"共 {counts['total']} 条样本")
     axes[1].bar_label(bars, padding=3, fontsize=9)
     axes[1].grid(axis="y", alpha=0.2)
     fig.suptitle("评测结果概览", fontsize=14, fontweight="bold", color="#17212B")
@@ -676,7 +736,7 @@ def build_docx(report: dict[str, Any], chart_path: Path, output_path: Path) -> N
         run.font.size = Pt(8)
         run.font.color.rgb = RGBColor.from_string(MUTED)
 
-    title_paragraph = document.add_paragraph()
+    title_paragraph = document.add_paragraph(style="Title")
     title_paragraph.paragraph_format.space_before = Pt(0)
     title_paragraph.paragraph_format.space_after = Pt(4)
     title_run = title_paragraph.add_run(REPORT_TITLE)
@@ -701,7 +761,7 @@ def build_docx(report: dict[str, Any], chart_path: Path, output_path: Path) -> N
         label_run.bold = True
         paragraph.add_run(str(value))
 
-    document.add_heading("1. 一句话结论", level=1)
+    document.add_heading("1. 测试总体结论", level=1)
     callout = document.add_table(rows=1, cols=1)
     callout.style = "Table Grid"
     fill = {"good": GOOD, "warning": WARN, "risk": RISK}.get(
@@ -713,7 +773,15 @@ def build_docx(report: dict[str, Any], chart_path: Path, output_path: Path) -> N
     callout.cell(0, 0).add_paragraph(report["conclusion"]["summary"])
     _set_docx_table_geometry(callout, (9360,))
 
-    document.add_heading("2. 核心指标怎么看", level=1)
+    for index, part in enumerate(report.get("intro_sections") or [], 1):
+        if index == 2:
+            document.add_heading("2. 评估依据与实施方法", level=1)
+        number = "1.1" if index == 1 else f"2.{index - 1}"
+        document.add_heading(f"{number} {part['title']}", level=2)
+        count = len(part["headers"])
+        widths = (2100, 7260) if count == 2 else (9360 // count,) * (count - 1) + (9360 - (9360 // count) * (count - 1),)
+        _docx_table(document, tuple(part["headers"]), part["rows"], widths)
+    document.add_heading("3. 测试结果汇总", level=1)
     _docx_table(
         document,
         ("指标", "结果", "说明", "用途"),
@@ -724,6 +792,8 @@ def build_docx(report: dict[str, Any], chart_path: Path, output_path: Path) -> N
         (1900, 1700, 4260, 1500),
     )
     chart_paragraph = document.add_paragraph()
+    chart_paragraph.paragraph_format.space_before = Pt(8)
+    chart_paragraph.paragraph_format.keep_with_next = True
     chart_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     chart_paragraph.add_run().add_picture(str(chart_path), width=Inches(4.5))
     caption = document.add_paragraph("图 1  评测结果概览")
@@ -732,7 +802,7 @@ def build_docx(report: dict[str, Any], chart_path: Path, output_path: Path) -> N
         run.font.size = Pt(8.5)
         run.font.color.rgb = RGBColor.from_string(MUTED)
 
-    document.add_heading("3. 发现与解释", level=1)
+    document.add_heading("4. 问题与结果分析", level=1)
     for item in report["findings"]:
         paragraph = document.add_paragraph()
         lead = paragraph.add_run(f"{item['title']}：")
@@ -742,12 +812,25 @@ def build_docx(report: dict[str, Any], chart_path: Path, output_path: Path) -> N
         )
         paragraph.add_run(item["detail"])
 
-    document.add_heading("4. 建议下一步", level=1)
+    document.add_heading("5. 改进建议与复验要求", level=1)
     for item in report["recommendations"]:
         document.add_paragraph(item, style="List Number")
 
-    document.add_heading("5. 用例结果明细", level=1)
-    if report["cases"]:
+    if report.get("sections"):
+        document.add_heading("6. 分项测试结果", level=1)
+    for index, part in enumerate(report.get("sections") or [], 1):
+        document.add_heading(f"6.{index} {part['title']}", level=2)
+        if part.get("note"):
+            document.add_paragraph(part["note"])
+        count = len(part["headers"])
+        widths = (9360 // count,) * (count - 1) + (9360 - (9360 // count) * (count - 1),)
+        _docx_table(document, tuple(part["headers"]), part["rows"], widths)
+    document.add_heading("附录 A：全部用例结果" if report.get("sections") else "附录 A：性能阶段明细" if report["performance_rows"] else "附录 A：用例结果明细", level=1)
+    if report.get("case_summary_text"):
+        document.add_paragraph(report["case_summary_text"])
+    if report["performance_rows"]:
+        _docx_table(document, ("阶段", "负载上限", "成功/总数", "实际 RPS", "P95 毫秒"), report["performance_rows"], (1900, 2000, 1600, 1600, 2260))
+    elif report["cases"]:
         _docx_table(
             document,
             ("用例", "分类", "状态", "综合分", "时延"),
@@ -759,14 +842,15 @@ def build_docx(report: dict[str, Any], chart_path: Path, output_path: Path) -> N
                     _percent(item["score"]),
                     _metric(item["latency_ms"], " ms"),
                 )
-                for item in report["cases"][:100]
+                for item in report["cases"]
             ],
             (3100, 1500, 1100, 1300, 2360),
         )
     else:
         document.add_paragraph("当前运行没有可展示的用例级明细。")
 
-    document.add_heading("6. 报告说明", level=1)
+    document.add_heading("附录 B：证据索引与报告说明", level=1)
+    _docx_table(document, ("编号", "证据位置"), [(row["id"], row["subject"]) for row in report.get("assessment_evidence", [])], (1500, 7860))
     notes_paragraph = document.add_paragraph("；".join(str(item) for item in report["notes"]))
     notes_paragraph.paragraph_format.space_after = Pt(0)
     for run in notes_paragraph.runs:
@@ -802,13 +886,13 @@ def build_pdf(report: dict[str, Any], chart_path: Path, output_path: Path) -> No
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import mm
-    from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.platypus import CondPageBreak, Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
     font = _pdf_font_name()
     styles = getSampleStyleSheet()
     title = ParagraphStyle("ModelReportTitle", parent=styles["Title"], fontName=font, fontSize=23, leading=28, alignment=0, textColor=colors.black, spaceAfter=4)
     subtitle = ParagraphStyle("ModelReportSubtitle", parent=styles["Heading2"], fontName=font, fontSize=13, leading=18, textColor=colors.HexColor("#373737"), spaceAfter=12)
-    heading = ParagraphStyle("ModelReportHeading", parent=styles["Heading2"], fontName=font, fontSize=13, leading=18, textColor=colors.HexColor("#2E74B5"), spaceBefore=12, spaceAfter=6)
+    heading = ParagraphStyle("ModelReportHeading", parent=styles["Heading2"], fontName=font, fontSize=13, leading=18, textColor=colors.HexColor("#2E74B5"), spaceBefore=12, spaceAfter=6, keepWithNext=True)
     body = ParagraphStyle("ModelReportBody", parent=styles["BodyText"], fontName=font, fontSize=9, leading=13, textColor=colors.HexColor("#263746"), spaceAfter=5)
     small = ParagraphStyle("ModelReportSmall", parent=body, fontSize=7.5, leading=10)
     story = [
@@ -816,7 +900,7 @@ def build_pdf(report: dict[str, Any], chart_path: Path, output_path: Path) -> No
         Paragraph(escape(f"{report['run_kind_text']} · {report['model_name']}"), subtitle),
         Paragraph(escape(f"报告编号：{report['report_number']}　完成时间：{report['finished_at']}"), small),
         Spacer(1, 4 * mm),
-        Paragraph("1. 一句话结论", heading),
+        Paragraph("1. 测试总体结论", heading),
     ]
     conclusion_fill = {"good": "#E5F5ED", "warning": "#FFF4D6", "risk": "#FCE9E8"}.get(report["conclusion"]["level"], "#EFF4F8")
     callout = Table(
@@ -824,7 +908,24 @@ def build_pdf(report: dict[str, Any], chart_path: Path, output_path: Path) -> No
         colWidths=[165 * mm],
     )
     callout.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(conclusion_fill)), ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#B9C8D3")), ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8), ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8)]))
-    story.extend([callout, Paragraph("2. 核心指标怎么看", heading)])
+    story.append(callout)
+    def append_section_table(label, section_table, *, parent="", note=""):
+        section_heading = Paragraph(escape(label), ParagraphStyle("ModelSectionHeading", parent=heading, keepWithNext=False))
+        lead = ([Paragraph(escape(parent), heading)] if parent else []) + [section_heading]
+        if note:
+            lead.append(Paragraph(escape(note), small))
+        first_rows = Table(section_table._cellvalues[:2], colWidths=section_table._colWidths)
+        first_rows.setStyle(TableStyle([("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5), ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5)]))
+        required = first_rows.wrap(165 * mm, 10000)[1] + sum(p.wrap(165 * mm, 10000)[1] + p.getSpaceBefore() + p.getSpaceAfter() for p in lead) + 12
+        story.extend([CondPageBreak(required), *lead, section_table])
+
+    for index, part in enumerate(report.get("intro_sections") or [], 1):
+        number = "1.1" if index == 1 else f"2.{index - 1}"
+        count = len(part["headers"])
+        intro_table = Table([[Paragraph(escape(str(cell)), body) for cell in row] for row in [part["headers"]] + part["rows"]], colWidths=([36 * mm, 129 * mm] if count == 2 else [165 * mm / count] * count), repeatRows=1)
+        intro_table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#CAD5DD")), ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EFF4F8")), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5), ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
+        append_section_table(f"{number} {part['title']}", intro_table, parent="2. 评估依据与实施方法" if index == 2 else "")
+    story.append(Paragraph("3. 测试结果汇总", heading))
     metric_rows = [["指标", "结果", "说明"]] + [
         [item["label"], item["value"], item["explanation"]] for item in report["metrics"]
     ]
@@ -835,28 +936,42 @@ def build_pdf(report: dict[str, Any], chart_path: Path, output_path: Path) -> No
     )
     table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#B9C8D3")), ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EFF4F8")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5), ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
     chart = Image(str(chart_path), width=165 * mm, height=66 * mm)
-    story.extend([table, Spacer(1, 4 * mm), chart, Paragraph("图 1　评测结果概览", small), Paragraph("3. 发现与解释", heading)])
+    story.extend([table, Spacer(1, 4 * mm), chart, Paragraph("图 1　评测结果概览", small), Paragraph("4. 问题与结果分析", heading)])
     for item in report["findings"]:
         story.append(Paragraph(f"<b>{escape(item['title'])}：</b>{escape(item['detail'])}", body))
-    story.append(Paragraph("4. 建议下一步", heading))
+    story.append(Paragraph("5. 改进建议与复验要求", heading))
     for index, item in enumerate(report["recommendations"], start=1):
         story.append(Paragraph(f"{index}. {escape(item)}", body))
-    story.append(Paragraph("5. 用例结果明细", heading))
-    if report["cases"]:
-        case_rows = [["用例", "分类", "状态", "综合分", "时延"]] + [
+    for index, part in enumerate(report.get("sections") or [], 1):
+        count = len(part["headers"])
+        part_table = Table([[Paragraph(escape(str(cell)), small) for cell in row] for row in [part["headers"]] + part["rows"]], colWidths=[165 * mm / count] * count, repeatRows=1)
+        part_table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#CAD5DD")), ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EFF4F8")), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+        append_section_table(f"6.{index} {part['title']}", part_table, parent="6. 分项测试结果" if index == 1 else "", note=part.get("note", ""))
+    # Reserve the heading, table header and first data row. Keeping an entire
+    # long table with the heading needlessly skips the remaining page space.
+    detail_heading = Paragraph("附录 A：全部用例结果" if report.get("sections") else "附录 A：性能阶段明细" if report["performance_rows"] else "附录 A：用例结果明细", ParagraphStyle("ModelDetailHeading", parent=heading, keepWithNext=False))
+    if report.get("case_summary_text"):
+        story.append(Paragraph(escape(report["case_summary_text"]), body))
+    if report["cases"] or report["performance_rows"]:
+        case_rows = ([["阶段", "负载上限", "成功/总数", "实际 RPS", "P95 毫秒"]] + report["performance_rows"]) if report["performance_rows"] else [["用例", "分类", "状态", "综合分", "时延"]] + [
             [item["name"], item["category"], item["status_text"], _percent(item["score"]), _metric(item["latency_ms"], " ms")]
-            for item in report["cases"][:100]
+            for item in report["cases"]
         ]
         case_table = Table(
             [[Paragraph(escape(str(cell)), small) for cell in row] for row in case_rows],
-            colWidths=[62 * mm, 30 * mm, 20 * mm, 23 * mm, 30 * mm],
+            colWidths=([35 * mm, 35 * mm, 28 * mm, 30 * mm, 37 * mm] if report["performance_rows"] else [62 * mm, 30 * mm, 20 * mm, 23 * mm, 30 * mm]),
             repeatRows=1,
         )
         case_table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#CAD5DD")), ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EFF4F8")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
-        story.append(case_table)
+        first_rows = Table(case_table._cellvalues[:2], colWidths=case_table._colWidths)
+        first_rows.setStyle(TableStyle([("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4), ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4)]))
+        required_height = first_rows.wrap(165 * mm, 10000)[1] + detail_heading.wrap(165 * mm, 10000)[1] + 18
+        story.extend([CondPageBreak(required_height), detail_heading, case_table])
     else:
-        story.append(Paragraph("当前运行没有可展示的用例级明细。", body))
-    story.append(Paragraph("6. 报告说明", heading))
+        story.extend([Paragraph("附录 A：用例结果明细", heading), Paragraph("当前运行没有可展示的用例级明细。", body)])
+    story.append(Paragraph("附录 B：证据索引与报告说明", heading))
+    for row in report.get("assessment_evidence", []):
+        story.append(Paragraph(escape(row["id"] + "：" + row["subject"]), small))
     for item in report["notes"]:
         story.append(Paragraph(f"· {escape(item)}", body))
     story.append(Paragraph(escape(f"系统任务 ID：{report['system_run_id'] or '—'}"), small))
@@ -883,7 +998,8 @@ def build_pdf(report: dict[str, Any], chart_path: Path, output_path: Path) -> No
 
 
 def generate_model_evaluation_report(
-    run: dict[str, Any], results: list[dict[str, Any]], output_dir: str | Path
+    run: dict[str, Any], results: list[dict[str, Any]], output_dir: str | Path,
+    *, model_store=None, model_profile_id="",
 ) -> dict[str, Any]:
     """Generate readable JSON, chart, DOCX, and PDF files in one artifact tree."""
 
@@ -892,6 +1008,12 @@ def generate_model_evaluation_report(
     root = Path(output_dir).resolve()
     root.mkdir(parents=True, exist_ok=True)
     report = build_model_evaluation_report(run, results)
+    from auto_test.reporting.model_assessment import assessment_sections, generate_analysis, load_analysis
+    if model_store is not None:
+        generate_analysis(report, root, model_store, model_profile_id)
+    else:
+        load_analysis(report, root)
+    report["intro_sections"] = assessment_sections(report)
     chart_path = root / "model_evaluation_overview.png"
     docx_path = root / "model_evaluation_report.docx"
     pdf_path = root / "model_evaluation_report.pdf"

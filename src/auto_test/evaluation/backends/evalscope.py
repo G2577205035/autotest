@@ -116,7 +116,7 @@ class EvalScopeBackend:
         inline_dataset = task_config.pop("_inline_dataset", None)
         inline_kind = str(task_config.pop("_inline_dataset_kind", "") or "")
         load_profile = dict(task_config.pop("_load_profile", {}) or {})
-        task_config.pop("_safety", None)
+        safety = dict(task_config.pop("_safety", {}) or {})
         if inline_dataset is not None:
             if inline_kind == "wmt24pp":
                 dataset_root = request.work_dir / "wmt24pp"
@@ -147,6 +147,8 @@ class EvalScopeBackend:
             "backend_version": request.backend_version or self.version,
             "work_dir": str(request.work_dir),
             "task_config": task_config,
+            "safety": safety,
+            "load_profile": load_profile,
             "secret_env_names": sorted(request.secret_env),
         }
         request_path.write_text(
@@ -248,9 +250,11 @@ class EvalScopeBackend:
             request.work_dir, secret_values=request.secret_env.values()
         )
         summary = dict(mapped.get("summary") or {})
+        execution = json.loads(output_path.read_text(encoding="utf-8")) if output_path.is_file() else {}
         if request.mode == "perf":
             performance = dict(summary.get("performance") or {})
             summary["load_profile"] = load_profile
+            summary["performance_execution"] = execution.get("performance_execution") or {}
             summary["capacity"] = analyze_capacity(performance.get("stages") or [])
             resource_path = request.work_dir / "resource_samples.csv"
             resource_rows: list[dict[str, str]] = []
@@ -262,9 +266,11 @@ class EvalScopeBackend:
             (request.work_dir / "summary.json").write_text(
                 json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
             )
-        emit(on_event, "completed", "EvalScope 子进程执行完成", phase="completed", progress=100)
+        safety_stopped = bool((execution.get("performance_execution") or {}).get("safety_stopped"))
+        emit(on_event, "failed" if safety_stopped else "completed", "错误率超过保护阈值，已停止增加负载" if safety_stopped else "EvalScope 子进程执行完成", phase="failed" if safety_stopped else "completed", progress=100)
         return BackendResult(
-            status="completed",
+            status="failed" if safety_stopped else "completed",
+            error_type="safety_error_rate" if safety_stopped else "",
             summary=summary,
             artifacts={"work_dir": str(request.work_dir), "runner_output": str(output_path)},
             raw=mapped,

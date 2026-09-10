@@ -2201,6 +2201,43 @@ class PlatformStore(ModelEvaluationStoreMixin):
             ).fetchall()
         return [self._decode_report_job(row) for row in rows]
 
+    def page_project_history(
+        self, kind: str, project_id: str, *, include_legacy: bool = False,
+        page: int = 1, page_size: int = 10,
+    ) -> dict[str, Any]:
+        """Filter the project's history before counting or limiting either SQL backend."""
+        tables = {
+            "reports": ("report_jobs", self._decode_report_job),
+            "stress": ("stress_jobs", self._decode_stress_job),
+            "scenarios": ("interface_scenario_runs", self._decode_interface_scenario_run),
+        }
+        table, decode = tables[kind]
+        size = max(1, min(int(page_size), 100))
+        project = "project_id" if kind == "scenarios" else (
+            "JSON_UNQUOTE(JSON_EXTRACT(options_json, '$._project_id'))"
+            if self.backend == "mysql" else "json_extract(options_json, '$._project_id')"
+        )
+        where = f"COALESCE({project}, '') = ?"
+        if include_legacy and kind != "scenarios" and project_id:
+            where = f"({where} OR COALESCE({project}, '') = '')"
+        with self._connection() as connection:
+            stats = connection.execute(
+                f"SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN status = 'succeeded' "
+                f"THEN 1 ELSE 0 END), 0) AS succeeded FROM {table} WHERE {where}",
+                (str(project_id),),
+            ).fetchone()
+            total = int(stats["total"])
+            pages = max(1, (total + size - 1) // size)
+            current = min(max(1, int(page)), pages)
+            rows = connection.execute(
+                f"SELECT * FROM {table} WHERE {where} "
+                "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+                (str(project_id), size, (current - 1) * size),
+            ).fetchall()
+        items = [decode(row, include_result=False) if kind == "scenarios" else decode(row) for row in rows]
+        return {"items": items, "total": total, "page": current, "page_size": size,
+                "total_pages": pages, "succeeded": int(stats["succeeded"])}
+
     def claim_report_job(self) -> dict[str, Any] | None:
         now = time.time()
         with self._connection() as connection:

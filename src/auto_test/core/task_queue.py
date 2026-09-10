@@ -253,7 +253,7 @@ def redis_connection_settings(
     ).strip()
     return {
         "url": url,
-        "username": username or None,
+        "username": (username or None) if password not in {None, ""} else None,
         "password": str(password) if password not in {None, ""} else None,
     }
 

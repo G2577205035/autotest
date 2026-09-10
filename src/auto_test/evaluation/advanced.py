@@ -237,30 +237,61 @@ def parse_judge_response(text: str, rubric: list[Any]) -> dict[str, Any]:
     """Parse a strict local-judge JSON response and preserve per-rubric reasoning."""
 
     value = str(text or "").strip()
-    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", value, re.S | re.I)
+    # Some compatible servers return a completed reasoning block in content.
+    # Only the explicit final answer is eligible; never parse JSON from inside it.
+    if value.startswith("<think>"):
+        thinking = re.match(r"<think>.*?</think>\s*", value, re.S)
+        if not thinking:
+            return {"status": "invalid", "score": None, "confidence": 0.0, "reason": "裁判推理内容未正常结束", "rubric": []}
+        value = value[thinking.end():].strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(\{.*?\})\s*```", value, re.S | re.I)
     if fenced:
         value = fenced.group(1)
     try:
         payload = json.loads(value)
     except (TypeError, ValueError, json.JSONDecodeError):
         return {"status": "invalid", "score": None, "confidence": 0.0, "reason": "裁判未返回合法 JSON", "rubric": []}
+    if not isinstance(payload, dict):
+        return {"status": "invalid", "score": None, "confidence": 0.0, "reason": "裁判 JSON 必须为对象", "rubric": []}
     score = payload.get("score")
     try:
-        normalized_score = max(0.0, min(float(score), 1.0))
+        normalized_score = float(score)
+        if not math.isfinite(normalized_score) or not 0 <= normalized_score <= 1 or isinstance(score, bool):
+            normalized_score = None
     except (TypeError, ValueError):
         normalized_score = None
     confidence = payload.get("confidence", 0.5)
     try:
         normalized_confidence = max(0.0, min(float(confidence), 1.0))
+        if not math.isfinite(float(confidence)) or isinstance(confidence, bool):
+            normalized_confidence = 0.0
     except (TypeError, ValueError):
         normalized_confidence = 0.0
     details = payload.get("rubric") if isinstance(payload.get("rubric"), list) else []
+    expected = {str(item.get("name") or "") if isinstance(item, dict) else str(item) for item in rubric}
+    seen, invalid = set(), []
+    for item in details:
+        if not isinstance(item, dict):
+            invalid.append("维度必须为对象")
+            continue
+        name, value = str(item.get("name") or ""), item.get("score")
+        if expected and name not in expected:
+            invalid.append("未知维度：" + name)
+        if name in seen:
+            invalid.append("重复维度：" + name)
+        seen.add(name)
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or not 0 <= value <= 1:
+            invalid.append("维度分数无效：" + name)
+    if expected - seen:
+        invalid.append("缺少维度：" + "、".join(sorted(expected - seen)))
+    if invalid:
+        normalized_score = None
     return {
         "status": "completed" if normalized_score is not None else "invalid",
         "score": normalized_score,
         "confidence": normalized_confidence,
-        "reason": str(payload.get("reason") or "")[:2000],
-        "rubric": details[: max(1, len(rubric) or 20)],
+        "reason": ("；".join(invalid) + ("；裁判说明：" if invalid else "") + str(payload.get("reason") or ""))[:2000],
+        "rubric": details,
     }
 
 
@@ -310,7 +341,7 @@ def select_manual_review_indices(total_cases: int, percent: int | float) -> set[
 
 
 def analyze_capacity(stages: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    rows = [dict(item) for item in stages if isinstance(item, dict)]
+    rows = [dict(item) for item in stages if isinstance(item, dict) and item.get("phase", "capacity") == "capacity"]
     rows.sort(key=lambda item: float(item.get("target_rps") or item.get("concurrency") or 0))
     stable = [item for item in rows if float(item.get("success_rate") or 0) >= 95]
     knee = None
@@ -363,16 +394,26 @@ def _pearson(xs: list[float], ys: list[float]) -> float | None:
 
 def correlate_resources(samples: Iterable[dict[str, Any]]) -> dict[str, Any]:
     rows = [dict(item) for item in samples if isinstance(item, dict)]
-    throughput = [float(item.get("request_throughput") or 0) for item in rows]
     correlations = {}
+    valid_counts = {}
     for field in ("cpu_percent", "gpu_percent", "memory_percent", "gpu_memory_percent"):
-        values = [float(item.get(field) or 0) for item in rows]
-        correlations[field] = _pearson(throughput, values)
+        pairs = []
+        for item in rows:
+            try:
+                throughput, value = float(item["request_throughput"]), float(item[field])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if math.isfinite(throughput) and math.isfinite(value) and throughput >= 0 and 0 <= value <= 100:
+                pairs.append((throughput, value))
+        valid_counts[field] = len(pairs)
+        correlations[field] = _pearson([x for x, _ in pairs], [y for _, y in pairs])
+    available = any(value is not None for value in correlations.values())
     return {
-        "available": len(rows) >= 3,
+        "available": available,
         "sample_count": len(rows),
+        "valid_sample_counts": valid_counts,
         "throughput_correlations": correlations,
-        "note": "相关系数用于定位资源瓶颈，不单独证明因果关系。" if len(rows) >= 3 else "至少需要 3 个同时间窗资源样本。",
+        "note": "相关系数不单独证明因果关系；缺失指标不按零填充。" if available else "至少需要 3 个同时间窗有效样本，且吞吐与资源指标均需存在变化。",
     }
 
 

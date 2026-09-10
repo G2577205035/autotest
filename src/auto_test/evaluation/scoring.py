@@ -8,9 +8,27 @@ import re
 from difflib import SequenceMatcher
 from typing import Any
 
+from auto_test.evaluation.value_matching import dates_in, has_quantity, has_sequence
+
 
 _CJK = re.compile(r"[\u3400-\u9fff]")
 _NON_CJK_TOKEN = re.compile(r"[A-Za-z0-9_]+|[^\sA-Za-z0-9_\u3400-\u9fff]")
+
+
+def _presentation_text(text: str) -> str:
+    return re.sub(r"\s+", "", re.sub(r"\*\*|__|`", "", text)).casefold()
+
+
+def _section_titles(text: str) -> set[str]:
+    titles = set()
+    for line in text.splitlines():
+        line = re.sub(r"^\s*#{1,6}\s*", "", line).strip()
+        if line.startswith(("**", "__")) and line.endswith(line[:2]):
+            line = line[2:-2].strip()
+        line = re.sub(r"^(?:\d+(?:\.\d+)*|[一二三四五六七八九十]+)[.、．)）]\s*", "", line)
+        line = re.sub(r"\s*[（(][A-Za-z][A-Za-z &/-]{0,80}[)）]$", "", line)
+        titles.add(line.rstrip("：:").strip().casefold())
+    return titles
 
 
 def estimate_token_count(text: str) -> int:
@@ -55,11 +73,24 @@ def score_response(text: str, rules: dict[str, Any] | None) -> dict[str, Any]:
     for term in list(rules.get("required_terms") or []):
         check(f"术语保持：{term}", str(term).casefold() in value.casefold(), str(term))
     for fact in list(rules.get("required_facts") or []):
-        check(f"事实覆盖：{fact}", str(fact).casefold() in value.casefold(), str(fact))
+        if rules.get("fact_normalization") == "presentation":
+            expected = _presentation_text(str(fact))
+            pattern = (r"(?<![a-z0-9])" if expected[:1].isascii() and expected[:1].isalnum() else "") + re.escape(expected)
+            pattern += r"(?![a-z0-9])" if expected[-1:].isascii() and expected[-1:].isalnum() else ""
+            present = re.search(pattern, _presentation_text(value)) is not None
+        else:
+            present = str(fact).casefold() in value.casefold()
+        check(f"事实覆盖：{fact}", present, str(fact))
     for entity in list(rules.get("required_entities") or []):
         check(f"实体保持：{entity}", str(entity).casefold() in value.casefold(), str(entity))
     for number in list(rules.get("required_numbers") or []):
         check(f"数字保持：{number}", str(number) in value, str(number))
+    for required_date in list(rules.get("required_dates") or []):
+        check(f"日期保持：{required_date}", str(required_date) in dates_in(value), required_date)
+    for quantity in list(rules.get("required_quantities") or []):
+        check(f"数值与单位保持：{quantity}", has_quantity(value, quantity), quantity)
+    for sequence in list(rules.get("required_sequences") or []):
+        check(f"批次/轮次保持：{sequence}", has_sequence(value, int(sequence), list(rules.get("protected_spans") or [])), sequence)
     for unit in list(rules.get("required_units") or []):
         check(f"单位保持：{unit}", str(unit).casefold() in value.casefold(), str(unit))
     for span in list(rules.get("protected_spans") or []):
@@ -67,8 +98,7 @@ def score_response(text: str, rules: dict[str, Any] | None) -> dict[str, Any]:
     for marker in list(rules.get("required_format") or rules.get("format_markers") or []):
         check(f"格式保持：{marker}", str(marker) in value, str(marker))
     for section in list(rules.get("required_sections") or []):
-        pattern = rf"(?:^|\n)[ \t]*(?:#+[ \t]*)?{re.escape(str(section))}[ \t]*(?::|：)?[ \t]*(?=\n|$)"
-        check(f"章节结构：{section}", re.search(pattern, value, re.I) is not None, str(section))
+        check(f"章节结构：{section}", str(section).casefold() in _section_titles(value), str(section))
     for term in list(rules.get("forbidden_terms") or []):
         check(f"禁止包含：{term}", str(term) not in value, str(term))
     for pattern in list(rules.get("required_patterns") or []):
@@ -116,6 +146,8 @@ def score_response(text: str, rules: dict[str, Any] | None) -> dict[str, Any]:
                     field in document and _json_type_matches(document[field], expected_type),
                     expected_type,
                 )
+            for field, expected_value in dict(schema.get("values") or {}).items():
+                check(f"JSON 值：{field}", field in document and document[field] == expected_value, expected_value)
     if not checks:
         check("非空响应", bool(value), "有效正文")
     passed_count = sum(1 for item in checks if item["passed"])

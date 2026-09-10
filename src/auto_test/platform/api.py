@@ -321,10 +321,11 @@ class ModelEvaluationRunInput(BaseModel):
     suite_version_id: str = Field(default="", max_length=64)
     judge_model_profile_id: str = Field(default="", max_length=64)
     server_session_id: str = Field(default="", max_length=64)
+    server_profile_id: str = Field(default="", max_length=64)
     manual_review_percent: int = Field(default=0, ge=0, le=100)
     stream: bool = False
-    max_tokens: int = Field(default=256, ge=8, le=8192)
-    timeout_seconds: float = Field(default=60, ge=1, le=600)
+    max_tokens: int = Field(default=4096, ge=8, le=8192)
+    timeout_seconds: float = Field(default=120, ge=1, le=600)
 
 
 class ModelEvaluationSuiteInput(BaseModel):
@@ -601,16 +602,21 @@ def create_platform_api(
         return str((identity_context(request).get("current_project") or {}).get("id") or "")
 
     def ensure_model_evaluation_report(
-        project_id: str, run_id: str
+        project_id: str, run_id: str, analyze: bool = False, model_profile_id: str = ""
     ) -> dict[str, Any]:
         run = platform_store.get_model_eval_run(project_id, run_id)
         if not run:
             raise KeyError(run_id)
         if str(run.get("status") or "") not in {"completed", "failed", "stopped"}:
             raise RuntimeError("评测尚未结束，暂不能生成最终报告")
-        results, _ = platform_store.list_model_eval_case_results(
+        results, total = platform_store.list_model_eval_case_results(
             project_id, run_id, offset=0, limit=1000
         )
+        while len(results) < total:
+            page, _ = platform_store.list_model_eval_case_results(project_id, run_id, offset=len(results), limit=1000)
+            if not page:
+                break
+            results.extend(page)
         artifact_ref = str(run.get("artifact_ref") or "")
         if artifact_ref:
             try:
@@ -621,7 +627,7 @@ def create_platform_api(
         else:
             root = artifact_storage.workspace("model-evaluations", project_id, run_id)
             artifact_ref = artifact_storage.reference(root)
-        generated = generate_model_evaluation_report(run, results, root)
+        generated = generate_model_evaluation_report(run, results, root, **({"model_store": platform_store, "model_profile_id": model_profile_id} if analyze else {}))
         artifact_storage.publish_tree(root)
         if str(run.get("artifact_ref") or "") != artifact_ref:
             platform_store.set_model_eval_run_artifact_ref(
@@ -1482,6 +1488,7 @@ def create_platform_api(
             "runs": runs,
             "comparisons": comparisons,
             "profiles": [public_profile(item) for item in profiles],
+            "server_profiles": [{"id": item["id"], "name": item.get("name"), "host": item.get("host")} for item in await run_in_threadpool(server_session_manager.list_profiles)],
             "server_sessions": [
                 item
                 for item in await run_in_threadpool(server_session_manager.list_sessions)
@@ -1677,7 +1684,8 @@ def create_platform_api(
 
     @router.get("/model-evaluation/suites/{suite_id}/versions/{version_id}")
     async def get_model_evaluation_suite_version(
-        suite_id: str, version_id: str, request: Request
+        suite_id: str, version_id: str, request: Request,
+        page: int = Query(1, ge=1), page_size: int = Query(1000, ge=1, le=1000),
     ):
         project_id = current_project_id(request)
         version = await run_in_threadpool(
@@ -1685,10 +1693,15 @@ def create_platform_api(
         )
         if not version or str(version.get("suite_id") or "") != suite_id:
             raise HTTPException(status_code=404, detail="evaluation suite version not found")
+        total = int(version.get("case_count") or 0)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        page = min(page, total_pages)
         cases = await run_in_threadpool(
-            platform_store.list_model_eval_suite_cases, project_id, version_id, 1000
+            platform_store.list_model_eval_suite_cases, project_id, version_id,
+            page_size, (page - 1) * page_size,
         )
-        return {"version": version, "cases": cases}
+        return {"version": version, "cases": cases, "total": total,
+                "page": page, "page_size": page_size, "total_pages": total_pages}
 
     @router.post("/model-evaluation/runs", status_code=202)
     async def create_model_evaluation_run(
@@ -1700,7 +1713,9 @@ def create_platform_api(
         if payload.plan not in PLAN_CONFIGS:
             raise HTTPException(status_code=400, detail="不支持的模型评测方案")
         try:
-            if payload.run_kind == "custom":
+            if payload.run_kind == "full":
+                suite, version, cases = {}, {}, []
+            elif payload.run_kind == "custom":
                 if not payload.suite_version_id:
                     raise ValueError("项目自定义评测必须选择已发布测试集版本")
                 version = await run_in_threadpool(
@@ -1745,7 +1760,19 @@ def create_platform_api(
                 raise HTTPException(status_code=404, detail="judge model profile not found")
             if str(judge_profile.get("provider") or "") != "openai-compatible":
                 raise HTTPException(status_code=409, detail="裁判模型必须使用 OpenAI Compatible 协议")
+            if profile and (str(profile.get("base_url") or "").rstrip("/"), profile.get("model_name")) == (str(judge_profile.get("base_url") or "").rstrip("/"), judge_profile.get("model_name")):
+                raise HTTPException(status_code=400, detail="裁判配置指向同一模型，请选择独立模型")
         resource_binding = {}
+        if payload.server_session_id and payload.server_profile_id:
+            raise HTTPException(status_code=400, detail="请选择一个资源采集目标")
+        if payload.server_profile_id:
+            asset = await run_in_threadpool(platform_store.get_server_profile, payload.server_profile_id)
+            if not asset:
+                raise HTTPException(status_code=404, detail="server profile not found")
+            resource_binding = {
+                "server_profile_id": asset["id"], "server_host": asset["host"],
+                "server_name": asset.get("name") or asset["host"], "scope": "saved_server_live_sampling",
+            }
         if payload.server_session_id:
             session = get_visible_server_session(payload.server_session_id, request)
             metric_payload = await run_in_threadpool(
@@ -1754,22 +1781,29 @@ def create_platform_api(
             latest_metric = (metric_payload.get("metrics") or [])[-1:] or []
             resource_binding = {
                 "server_session_id": payload.server_session_id,
+                "server_profile_id": str(session.get("profile_id") or ""),
+                "server_host": str(session.get("host") or ""),
                 "server_name": str(session.get("name") or session.get("host") or "关联服务器"),
                 "baseline_sample": (latest_metric[0].get("data") if latest_metric else {}),
                 "baseline_sample_at": (latest_metric[0].get("created_at") if latest_metric else None),
-                "scope": "submission_baseline",
+                "scope": "saved_server_live_sampling" if session.get("profile_id") else "submission_baseline",
             }
         try:
-            backend, backend_version, mode, task_config = build_task_configuration(
-                run_kind=payload.run_kind,
-                plan=payload.plan,
-                profile=profile,
-                cases=cases,
-                stream=payload.stream,
-                max_tokens=payload.max_tokens,
-                timeout=payload.timeout_seconds,
-                judge_profile=judge_profile,
-            )
+            if payload.run_kind == "full":
+                from auto_test.evaluation.full import build_full_configuration
+                suite, version, task_config = await run_in_threadpool(
+                    build_full_configuration, platform_store, project_id,
+                    profile=profile, judge_profile=judge_profile, suite_version_id=payload.suite_version_id,
+                    max_tokens=payload.max_tokens, timeout=payload.timeout_seconds,
+                    manual_review_percent=payload.manual_review_percent,
+                )
+                backend, backend_version, mode = "full", "1.0", "eval"
+            else:
+                backend, backend_version, mode, task_config = build_task_configuration(
+                    run_kind=payload.run_kind, plan=payload.plan, profile=profile, cases=cases,
+                    stream=payload.stream, max_tokens=payload.max_tokens,
+                    timeout=payload.timeout_seconds, judge_profile=judge_profile,
+                )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         task_config["manual_review_percent"] = payload.manual_review_percent
@@ -1787,7 +1821,7 @@ def create_platform_api(
         snapshot = {
             "schema_version": "2.0",
             "run_kind": payload.run_kind,
-            "plan": payload.plan,
+            "plan": "deep" if payload.run_kind == "full" else payload.plan,
             "mode": mode,
             "model": model_snapshot,
             "suite": {
@@ -2045,6 +2079,23 @@ def create_platform_api(
             },
         }
 
+    @router.post("/model-evaluation/runs/{run_id}/report/conclusion")
+    async def generate_model_evaluation_conclusion(run_id: str, request: Request, model_profile_id: str = ""):
+        context = identity_context(request)
+        if not (context.get("user") or {}).get("is_superuser") and "evaluation:view" not in (context.get("permissions") or []):
+            raise HTTPException(status_code=403, detail="需要模型评测查看权限")
+        try:
+            generated = await run_in_threadpool(ensure_model_evaluation_report, current_project_id(request), run_id, True, model_profile_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="evaluation run not found") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=500, detail="评测报告分析生成失败") from exc
+        analysis = generated["report"]["analysis"]
+        audit_evaluation_change(request, "generate_conclusion", "model_evaluation_run", run_id, {"status": analysis["status"], "prompt_version": analysis.get("prompt_version"), "evidence_sha256": analysis.get("evidence_sha256")})
+        return {"report": generated["report"]}
+
     @router.get("/model-evaluation/runs/{run_id}/report/{report_format}")
     async def download_model_evaluation_report(
         run_id: str, report_format: str, request: Request
@@ -2125,6 +2176,19 @@ def create_platform_api(
         artifact_ref = str(run.get("artifact_ref") or "")
         if not artifact_ref:
             raise HTTPException(status_code=409, detail="评测产物尚未生成")
+        if kind == "evidence":
+            if (run.get("snapshot") or {}).get("run_kind") != "full" or run.get("status") not in {"completed", "failed", "stopped"}:
+                raise HTTPException(status_code=409, detail="全量任务结束后可下载证据包")
+            from auto_test.reporting.model_evaluation_full import build_evidence_archive
+            root = await run_in_threadpool(artifact_storage.materialize_tree, artifact_ref)
+            results, total = await run_in_threadpool(platform_store.list_model_eval_case_results, project_id, run_id, limit=1000)
+            while len(results) < total:
+                page, _ = await run_in_threadpool(platform_store.list_model_eval_case_results, project_id, run_id, offset=len(results), limit=1000)
+                if not page:
+                    break
+                results.extend(page)
+            path = await run_in_threadpool(build_evidence_archive, root, run, results)
+            return FileResponse(str(path), media_type="application/zip", filename="model_evaluation_evidence.zip")
         names = {
             "summary": ("summary.json",),
             "responses": ("responses.jsonl",),
@@ -2138,7 +2202,7 @@ def create_platform_api(
                 (
                     candidate
                     for name in names
-                    for candidate in sorted(root.rglob(name))
+                    for candidate in [root / name, *sorted(root.rglob(name))]
                     if candidate.is_file()
                 ),
                 None,
@@ -2194,7 +2258,18 @@ def create_platform_api(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.get("/reports")
-    async def list_reports(request: Request, limit: int = Query(default=100, ge=1, le=500)):
+    async def list_reports(
+        request: Request, limit: int = Query(default=100, ge=1, le=500),
+        page: int = Query(default=1, ge=1),
+        page_size: int | None = Query(default=None, ge=1, le=100),
+    ):
+        if page_size is not None:
+            result = await run_in_threadpool(
+                platform_store.page_project_history, "reports", current_project_id(request),
+                include_legacy=legacy_visible(request), page=page, page_size=page_size,
+            )
+            result["reports"] = result.pop("items")
+            return result
         reports = [
             item for item in platform_store.list_report_jobs(500)
             if visible_in_project(item, request)
@@ -2542,6 +2617,18 @@ def create_platform_api(
             raise HTTPException(status_code=404, detail="接口场景执行记录不存在")
         return run
 
+    @router.get("/interface-scenario-runs")
+    async def page_interface_scenario_runs(
+        request: Request, page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=10, ge=1, le=100),
+    ):
+        result = await run_in_threadpool(
+            platform_store.page_project_history, "scenarios", current_project_id(request),
+            page=page, page_size=page_size,
+        )
+        result["runs"] = result.pop("items")
+        return result
+
     @router.get("/interface-scenario-runs/{run_id}")
     async def get_interface_scenario_run(run_id: str, request: Request):
         run = await run_in_threadpool(
@@ -2784,7 +2871,18 @@ def create_platform_api(
         }
 
     @router.get("/stress-jobs")
-    async def list_stress_jobs(request: Request, limit: int = Query(default=100, ge=1, le=500)):
+    async def list_stress_jobs(
+        request: Request, limit: int = Query(default=100, ge=1, le=500),
+        page: int = Query(default=1, ge=1),
+        page_size: int | None = Query(default=None, ge=1, le=100),
+    ):
+        if page_size is not None:
+            result = await run_in_threadpool(
+                platform_store.page_project_history, "stress", current_project_id(request),
+                include_legacy=legacy_visible(request), page=page, page_size=page_size,
+            )
+            result["jobs"] = result.pop("items")
+            return result
         jobs = [
             item for item in platform_store.list_stress_jobs(500)
             if visible_in_project(item, request)

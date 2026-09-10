@@ -1,0 +1,23 @@
+# Optional complete model-evaluation runtime. Build the platform base first.
+# vendor/evalscope must be SHA-256 verified before the network-free build.
+ARG LIEMA_BASE_IMAGE
+FROM ${LIEMA_BASE_IMAGE} AS evaluation-builder
+
+USER root
+COPY vendor/evalscope/wheels /eval-wheels
+COPY vendor/evalscope/requirements.lock /eval-requirements.lock
+# Keep a real interpreter: application path normalization resolves symlinks.
+RUN python -m venv --copies /opt/evalscope \
+    && /opt/evalscope/bin/python -m pip install \
+        --no-cache-dir --no-index --find-links=/eval-wheels \
+        --requirement /eval-requirements.lock \
+    && /opt/evalscope/bin/python -m pip check
+
+FROM ${LIEMA_BASE_IMAGE}
+COPY --from=evaluation-builder /opt/evalscope /opt/evalscope
+COPY vendor/evalscope/nltk_data /opt/nltk_data
+ENV LIEMA_EVALSCOPE_PYTHON=/opt/evalscope/bin/python \
+    NLTK_DATA=/opt/nltk_data \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
+USER liema

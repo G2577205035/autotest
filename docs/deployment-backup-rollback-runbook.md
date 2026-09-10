@@ -1,23 +1,25 @@
 # 烈马自动化测试平台部署、备份与回滚手册
 
-> 文档版本：1.1  
-> 基线日期：2026-08-24  
+> 文档版本：1.3
+> 基线日期：2026-09-09
 > 适用范围：正式服务器首次部署、版本升级、备份恢复与故障回退  
 > 安全原则：只操作平台专用数据库、对象空间和持久卷；不得修改业务原始数据库，不在命令、文档或日志中写入明文凭据。
 
 ## 1. 当前部署边界
 
+**新机器首次部署或迁移旧平台，先按 [全新机器部署与换机手册](pycharm-lan-deployment-guide.md) 执行。** 该手册提供当前完整交付包的逐步命令、环境变量说明和切换顺序；本文件侧重备份、恢复与回滚规则。应用 ZIP 不包含 MySQL、MinIO、Redis 或其生产数据，旧平台迁移还必须单独安全转移主密钥、数据和五个应用卷。
+
 `deploy/compose.yml` 是 Web、Worker、Redis 和持久卷的本地/自包含部署基线；复用外部 MySQL、MinIO 和 Redis 时使用 `deploy/compose.external.yml`。两者都不是未经配置即可上线的生产方案：
 
 - Web 使用单进程 `uvicorn --workers 1`，因为 SSH 长连接和压测会话仍在 Web 进程内。
 - Web 默认只绑定到 `127.0.0.1:8080`；明确采用受控局域网 HTTP 时可绑定指定内网地址，并设置 `LIEMA_SESSION_COOKIE_SECURE=false`。HTTPS 入口必须改为 `true`。
-- Compose 内置 Redis 当前适合隔离网络中的本地/联调基线；正式部署必须启用认证，或通过 `deploy/compose.external.yml` 接入已启用 ACL/TLS 的专用 Redis。
+- Compose 内置 Redis 可用于自包含部署，也可通过 `deploy/compose.external.yml` 复用现场 Redis；密码是否填写由服务端配置决定。
 - MySQL、MinIO 和 Redis 的真实凭据必须由环境变量、Docker Secret 或企业密钥管理系统注入。
 - `LIEMA_MASTER_KEY` 必须稳定保存。丢失或变更会导致历史模型 Key、服务器凭据和未领取任务凭据无法解密。
 
 Redis 只承载唤醒信号和短期 Worker 心跳；MySQL/SQLite 才是任务状态的最终事实源。因此 Redis 数据丢失会影响即时唤醒，但不应造成持久化任务丢失。
 
-受控内网临时复用免密 Redis 只能作为经用户明确授权的过渡方案：不得修改共享 Redis 配置或现有键；必须为平台设置唯一 `LIEMA_REDIS_NAMESPACE`，启动前确认该前缀为空，启动后确认平台只写入本前缀；同时记录后续 ACL/密码改造项。该例外不改变长期生产环境必须认证和限制网络访问的要求。
+2026-09-09 用户确认 Redis 密码长期保持可选：有密码时填写，无密码时留空使用免密连接。平台使用唯一 `LIEMA_REDIS_NAMESPACE`，只写自己的前缀，不修改共享 Redis 配置或其他键；错误密码不会静默退回免密，不再另列强制认证改造待办。
 
 ## 2. 开始部署前需要提供的信息
 
@@ -61,7 +63,7 @@ docker compose version
 
 - MySQL 使用平台专用库，账号只拥有该库所需的建表、读写和索引权限。
 - MinIO bucket 由运维预建，或明确批准平台首次创建；生产环境不与业务原始对象混用 prefix。
-- Redis 禁止公网访问，启用 ACL/密码；应用凭据失败时不得退回匿名连接。
+- Redis 限制在部署网络内；有密码时按现场配置认证，无密码时留空；应用凭据失败时不得退回匿名连接。
 - 备份目标与生产数据不在同一故障域，至少有一份副本可离机恢复。
 
 ### 3.3 密钥检查
@@ -122,16 +124,30 @@ DOCKER_BUILDKIT=0 docker build \
 
 离线构建仍要求先可信加载官方 `python:3.12-slim` 基础镜像；传输归档和 `vendor/` 中每个依赖都应核验 SHA-256。`.env.production`、基础镜像归档和离线传输归档必须被 `.dockerignore` 排除，不能进入构建上下文。
 
+完整模型评测版本还需解包并核验发布包中的 `vendor/evalscope/`，其中包含 `evalscope[perf]==1.11.1` 的固定传递依赖、官方来源与许可证元数据、构建后的 wheel、SHA-256 清单及 NLTK `punkt_tab` 离线资源。先用 `Dockerfile.offline` 构建平台基础镜像，再执行：
+
+```bash
+(cd vendor/evalscope && sha256sum -c SHA256SUMS)
+docker build --network=none \
+  --build-arg LIEMA_BASE_IMAGE=<已验证的平台基础镜像> \
+  -f deploy/docker/Dockerfile.evalscope-offline \
+  -t <完整发布镜像的不可变版本> .
+```
+
+EvalScope 使用 `/opt/evalscope/bin/python` 独立虚拟环境，镜像通过 `LIEMA_EVALSCOPE_PYTHON` 指定入口，并设置离线资源环境变量。发布前必须在无外网容器内通过本地假模型的标准评测、WMT BLEU 和性能压测 PoC；该验收不调用真实模型，也不证明真实模型质量或容量。开发环境 Python 3.11 与生产隔离 Python 3.12 的兼容性分别记录，不能相互代替。新镜像的子进程脚本从已安装 Python 包解析，不依赖部署目录存在源码树。
+
+升级应使用独立的版本构建目录，并显式保留原 Compose 项目名、生产环境文件、Web 端口和持久卷。生产环境文件只保存在原受限位置；源码包和离线依赖包不得携带该文件或开发环境配置。
+
 ### 4.2 配置生产变量
 
 从 `deploy/env.production.example` 复制生产环境文件，例如 `cp deploy/env.production.example .env.production`；成品仅保存在部署服务器或改用等价 Secret，权限建议为 `0600`。环境文件不得提交到 Git，也不得放入交付压缩包。
 
 正式部署有两种方式：
 
-1. 推荐：使用 `deploy/compose.external.yml` 连接运维提供的已认证 Redis，并注入 ACL 凭据；该文件不会创建 Redis 容器。
-2. 随平台部署 Redis：先提供经审查的认证配置/Secret，再启动；不得直接使用当前免密基线长期运行。
+1. 推荐：使用 `deploy/compose.external.yml` 连接运维提供的 Redis；有密码时注入密码和可选 ACL 用户名，无密码时留空；该文件不会创建 Redis 容器。
+2. 随平台部署 Redis：按现场服务端配置决定是否启用认证；客户端环境文件与服务端保持一致。
 
-在没有确认 Redis 服务端认证生效前，不进入正式上线步骤。
+空密码使用免密连接，ACL 用户名仅在密码非空时使用；配置了错误密码时报告连接不可用，不静默降级到免密。
 
 ### 4.3 部署前配置校验
 
@@ -144,7 +160,7 @@ docker compose --env-file .env.production -f deploy/compose.external.yml config 
 
 ### 4.4 启动顺序
 
-1. 核验外部 Redis 认证和网络可用性。
+1. 核验外部 Redis 网络及按现场认证配置的连接可用性。
 2. 启动 Worker，确认心跳建立。
 3. 启动 Web，确认数据库与产物存储后端正确。
 4. 最后启用反向代理流量。
@@ -190,7 +206,7 @@ curl --fail --silent http://127.0.0.1:8080/health
 升级前必须完成：
 
 1. 暂停新任务提交或安排业务静默窗口。
-2. 确认业务自动化、接口场景、企业报告和压测任务没有处于排队/运行状态。
+2. 确认业务自动化、接口场景、企业报告、压测和模型评测五类任务没有处于排队/运行状态。
 3. 记录当前镜像 tag、镜像 digest、Compose 文件版本和 `/health` 输出。
 4. 记录当前 `LIEMA_MASTER_KEY` 的 Secret 版本，只记录标识，不记录密钥值。
 5. 备份平台专用 MySQL、MinIO 和 Docker 持久卷。
@@ -270,6 +286,8 @@ docker volume ls --filter "label=com.docker.compose.project=${LIEMA_COMPOSE_PROJ
 - `redis-data`
 
 正式环境以 MySQL/MinIO 为主时，本地 data/artifacts 仍可能包含缓存、暂存和迁移状态，不能因为使用外部存储就跳过卷备份。
+
+上述 `redis-data` 只适用于确实由本平台自包含 Compose 创建的 Redis 卷；`compose.external.yml` 只声明五个应用卷。换机恢复必须逐卷核对实际 Compose 标签及映射，不得按示例名称覆盖既有业务卷。
 
 ### 6.4 主密钥与配置
 
@@ -399,7 +417,7 @@ mc mirror --overwrite --preserve \
 ## 11. 恢复验收
 
 - [ ] `/health` 返回 `status=ok`，后端类型与环境一致。
-- [ ] Redis 可认证，Worker 心跳在线。
+- [ ] Redis 按现场密码或免密配置连接成功，Worker 心跳在线。
 - [ ] 原用户可登录，角色与项目成员关系正确。
 - [ ] 历史任务、报告和审计记录可查询。
 - [ ] 随机抽取的 DOCX/PDF 与对象可读取。
@@ -430,3 +448,7 @@ mc mirror --overwrite --preserve \
 | 遗留问题 |  |
 
 记录只保留标识、摘要和校验结果，不记录任何明文凭据。
+
+## 2026-09-10.3 分页界面更新
+
+本次版本更新统一列表跳页、每页条数与滚动区域，沿用原有 Compose、平台配置和数据卷，不需要数据库结构迁移。切换前确认所有任务终态与 SSH 会话空闲，启动后复核 Web 健康、Worker 心跳、匿名访问门禁和静态版本，再按换机手册执行分页验收。用户明确暂缓新增备份；离线软件包不包含生产配置、凭据或数据，软件包不能替代数据迁移。

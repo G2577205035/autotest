@@ -7,6 +7,7 @@ from typing import Any
 import requests
 
 from auto_test.common.paths import PROJECT_ROOT, prepare_runtime_layout
+from auto_test.common.env import get_env
 from auto_test.platform.contracts import PlatformRepository
 from auto_test.platform.persistence import create_platform_repository
 from auto_test.platform.secrets import (
@@ -18,6 +19,14 @@ from auto_test.platform.secrets import (
 
 class ModelSecretError(SecretEncryptionError):
     pass
+
+
+class ModelResponseError(RuntimeError):
+    """A safe diagnostic; never include remote response bodies or credentials."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
 
 
 def encrypt_secret(secret: str) -> str:
@@ -91,14 +100,31 @@ def call_model(
             "max_tokens": int(profile.get("max_tokens", 2000)),
         },
         timeout=timeout,
+        verify=str(get_env("MODEL_CA_BUNDLE", "")).strip() or True,
     )
     if response.status_code != 200:
-        raise RuntimeError(f"模型接口返回 HTTP {response.status_code}: {(response.text or '')[:300]}")
-    data = response.json()
+        raise ModelResponseError("http_error", f"模型接口返回 HTTP {response.status_code}，请检查接口地址、认证和服务状态")
     try:
-        return str(data["choices"][0]["message"]["content"]).strip()
-    except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError("模型接口响应中缺少 choices[0].message.content") from exc
+        data = response.json()
+    except ValueError as exc:
+        raise ModelResponseError("invalid_response_json", "模型接口返回了非 JSON 内容（可能是网关或登录页面），请检查模型地址和网络代理") from exc
+    try:
+        choice = data["choices"][0]
+        message = choice["message"]
+        if choice.get("finish_reason") == "length":
+            raise ModelResponseError("output_truncated", "模型输出达到长度上限，分析内容被截断；请提高模型配置的最大 Tokens，或选择能在该预算内完成输出的模型")
+        if choice.get("finish_reason") == "content_filter" or message.get("refusal"):
+            raise ModelResponseError("output_refused", "模型未提供分析正文，请检查所选模型的内容限制")
+        content = message.get("content")
+        if isinstance(content, list):
+            # Some compatible services return text content blocks. Reasoning
+            # blocks are not final answers and must never become report text.
+            content = "".join(block["text"] for block in content if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str))
+        if not isinstance(content, str) or not content.strip():
+            raise ModelResponseError("empty_content", "模型未返回有效正文（可能仅返回思考内容），请检查模型输出设置或选择其他模型")
+        return content.strip()
+    except (KeyError, IndexError, TypeError, AttributeError) as exc:
+        raise ModelResponseError("invalid_response_structure", "模型接口响应缺少有效的 choices[0].message，请检查 OpenAI 兼容接口配置") from exc
 
 
 def test_profile(store: PlatformRepository, profile_id: str) -> dict[str, Any]:

@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -361,6 +361,60 @@ class EvaluationMvpApiTests(unittest.TestCase):
             f"/api/model-evaluation/runs/{run_id}", headers=self.headers
         )
         self.assertEqual(deleted.status_code, 200, deleted.text)
+
+    def test_report_analysis_protocol_failure_retry_and_downloads_keep_same_measurements(self):
+        from tests.test_model_evaluation_report import ModelEvaluationReportTests
+        submitted = self.client.post("/api/model-evaluation/runs", headers=self.headers, json={"run_kind": "mock", "plan": "quick"})
+        run_id = submitted.json()["id"]
+        self.evaluation_manager.run_once()
+        url = f"/api/model-evaluation/runs/{run_id}/report"
+        original = self.client.get(url).json()["report"]
+        profile = {"id": "fixture", "base_url": "https://model.test", "model_name": "fixture", "api_key": "private-test-secret"}
+        bad_gateway = Mock(status_code=200)
+        bad_gateway.json.side_effect = json.JSONDecodeError("private-test-secret", "<html>", 0)
+        valid = ModelEvaluationReportTests.analysis_response(original)
+        responses = [bad_gateway,
+                     Mock(status_code=200, json=Mock(return_value={"choices": [{"message": {"content": "格式不正确"}}]})),
+                     Mock(status_code=200, json=Mock(return_value={"choices": [{"finish_reason": "stop", "message": {"content": "结果如下：\n```json\n" + json.dumps(valid) + "\n```"}}]}))]
+        with patch.object(self.store, "active_model_profile", return_value=profile), patch("auto_test.platform.models.requests.post", side_effect=responses) as post:
+            failed = self.client.post(url + "/conclusion", headers=self.headers)
+            self.assertEqual(failed.status_code, 200, failed.text)
+            self.assertEqual(failed.json()["report"]["analysis"]["error_code"], "invalid_response_json")
+            self.assertNotIn("private-test-secret", failed.text)
+            self.assertEqual(post.call_count, 1)
+            corrected = self.client.post(url + "/conclusion", headers=self.headers)
+            self.assertEqual(corrected.status_code, 200, corrected.text)
+            report = corrected.json()["report"]
+            self.assertEqual(report["analysis"]["status"], "completed")
+            self.assertEqual(report["analysis"]["generation"]["attempts"], 2)
+            for key in ("conclusion", "metrics", "cases", "assessment_evidence"):
+                self.assertEqual(report[key], original[key])
+            self.assertEqual(self.client.get(url).json()["report"]["analysis"], report["analysis"])
+            for extension, signature in (("pdf", b"%PDF"), ("docx", b"PK")):
+                download = self.client.get(url + "/" + extension)
+                self.assertEqual(download.status_code, 200)
+                self.assertTrue(download.content.startswith(signature))
+            self.assertEqual(post.call_count, 3)
+
+    def test_report_analysis_requires_explicit_post_csrf_and_current_project(self):
+        submitted = self.client.post("/api/model-evaluation/runs", headers=self.headers, json={"run_kind": "mock", "plan": "quick"})
+        run_id = submitted.json()["id"]
+        self.evaluation_manager.run_once()
+        url = f"/api/model-evaluation/runs/{run_id}/report"
+        with patch("auto_test.platform.models.call_model") as call:
+            viewed = self.client.get(url)
+            self.assertEqual(viewed.status_code, 200)
+            call.assert_not_called()
+            self.assertEqual(self.client.post(url + "/conclusion").status_code, 403)
+            generated = self.client.post(url + "/conclusion", headers=self.headers)
+            self.assertEqual(generated.status_code, 200, generated.text)
+            self.assertEqual(generated.json()["report"]["analysis"]["status"], "unavailable")
+            call.assert_not_called()
+        from auto_test.platform.identity import _required_permission
+        self.assertEqual(_required_permission("POST", url + "/conclusion"), "report:manage")
+        project = self.store.create_project("OTHERREPORT", "另一项目")
+        response = self.client.post(url + "/conclusion", headers={**self.headers, "X-Project-ID": project["id"]})
+        self.assertEqual(response.status_code, 404, response.text)
 
 
 if __name__ == "__main__":

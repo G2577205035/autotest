@@ -30,6 +30,10 @@ PLAN_CONFIGS = {
 
 
 RUN_KINDS = {
+    "full": {
+        "label": "全量测评（全部维度）",
+        "description": "串行执行全部内置质量专项、流式/非流式基础、并发与深度性能；可附加项目测试集。最高并发 16，报告逐项标明覆盖、缺测和证据。",
+    },
     "mock": {
         "label": "Mock 流程验证",
         "description": "不调用真实模型，用于验证排队、监控、停止和结果链路。",
@@ -52,7 +56,7 @@ RUN_KINDS = {
     },
     "deep_performance": {
         "label": "深度性能与容量",
-        "description": "固定并发/RPS、突发和持续负载，识别容量拐点并保留恢复观察配置。",
+        "description": "有并发上限的 RPS 阶梯、突发、持续负载和恢复探测；逐阶段执行错误率保护。",
     },
     "translation": {
         "label": "中英双向翻译",
@@ -109,6 +113,8 @@ def build_task_configuration(
         raise ValueError("不支持的模型评测类型")
     if plan not in PLAN_CONFIGS:
         raise ValueError("不支持的模型评测方案")
+    if run_kind == "full":
+        raise ValueError("全量测评必须使用不可变组合配置")
     normalized_cases = [
         {
             "id": str(item.get("id") or ""),
@@ -119,6 +125,18 @@ def build_task_configuration(
         for item in cases
     ]
     case_limit = (_CASE_LIMITS.get(run_kind) or {}).get(plan)
+    if run_kind == "translation" and case_limit:
+        # Round-robin by direction, preserving suite order within each group.
+        # Short groups naturally give their unused quota to the remaining ones.
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for item in normalized_cases:
+            groups.setdefault(item["category"], []).append(item)
+        normalized_cases = [
+            group[index]
+            for index in range(max((len(group) for group in groups.values()), default=0))
+            for group in groups.values()
+            if index < len(group)
+        ]
     if case_limit:
         normalized_cases = normalized_cases[:case_limit]
     if run_kind in {"mock", "mock_full"}:
@@ -142,7 +160,7 @@ def build_task_configuration(
                 "model": str(judge_profile.get("model_name") or ""),
                 "api_url": chat_completions_url(str(judge_profile.get("base_url") or "")),
                 "temperature": 0.0,
-                "max_tokens": min(1024, max(256, int(max_tokens))),
+                "max_tokens": min(4096, max(1024, int(max_tokens))),
             }
         return (
             "native",
@@ -184,7 +202,7 @@ def build_task_configuration(
                 "api_url": api_url,
                 "generation_config": {"max_tokens": max(1, int(max_tokens)), "stream": bool(stream)},
                 "eval_batch_size": 1,
-                "limit": len(inline) if plan == "standard" else min(2, len(inline)),
+                "limit": min(2, len(inline)) if plan == "quick" else len(inline),
                 "no_timestamp": True,
                 "collect_perf": True,
                 "_inline_dataset": inline,
@@ -246,9 +264,9 @@ def build_task_configuration(
             "api": "openai",
             "url": api_url,
             "number": request_counts if deep_rate_sweep else list(stage["number"]),
-            "parallel": [1] if deep_rate_sweep else list(stage["parallel"]),
+            "parallel": [max(stage["parallel"])] * len(fixed_rates) if deep_rate_sweep else list(stage["parallel"]),
             "rate": fixed_rates if deep_rate_sweep else -1,
-            "open_loop": deep_rate_sweep,
+            "open_loop": False,
             "warmup_num": 0.1 if deep_rate_sweep else 0,
             "duration": 60 if deep_rate_sweep else None,
             "dataset": "openqa",
@@ -268,7 +286,8 @@ def build_task_configuration(
             "_load_profile": {
                 "kind": "deep" if run_kind == "deep_performance" else "concurrency",
                 "fixed_rps": fixed_rates if deep_rate_sweep else [],
-                "open_loop": deep_rate_sweep,
+                "open_loop": False,
+                "dispatch_policy": "bounded_rate" if deep_rate_sweep else "fixed_concurrency",
                 "stage_duration_seconds": 60 if deep_rate_sweep else 0,
                 "burst": {"target_rps": max(fixed_rates), "requests": max(request_counts)} if deep_rate_sweep else {},
                 "sustained": {"target_rps": fixed_rates[-2], "duration_seconds": 60} if deep_rate_sweep else {},

@@ -74,10 +74,12 @@ def _normalized_summary(documents: list[dict[str, Any]]) -> dict[str, Any]:
         total = int(payload.get("Total Requests") or 0)
         succeeded = int(payload.get("Success Requests") or 0)
         stage = {
+            "stage_index": next((int(part.split("-", 2)[1]) for part in path.split("/") if part.startswith("stage-") and len(part.split("-", 2)) == 3 and part.split("-", 2)[1].isdigit()), None),
+            "phase": next((part.split("-", 2)[2] for part in path.split("/") if part.startswith("stage-") and len(part.split("-", 2)) == 3), "capacity"),
             "concurrency": int(payload.get("Concurrency") or 0),
             "target_rps": (
                 float(payload.get("Request Rate (req/s)"))
-                if payload.get("Request Rate (req/s)") is not None
+                if payload.get("Request Rate (req/s)") is not None and float(payload.get("Request Rate (req/s)")) > 0
                 else None
             ),
             "total_requests": total,
@@ -117,7 +119,7 @@ def _normalized_summary(documents: list[dict[str, Any]]) -> dict[str, Any]:
         performance_stages.append(stage)
     if performance_stages:
         performance_stages.sort(
-            key=lambda item: float(item.get("target_rps") or item.get("concurrency") or 0)
+            key=lambda item: (item["stage_index"] if item.get("stage_index") is not None else float(item.get("target_rps") or item.get("concurrency") or 0))
         )
         total = sum(item["total_requests"] for item in performance_stages)
         succeeded = sum(item["successful_requests"] for item in performance_stages)
@@ -126,7 +128,8 @@ def _normalized_summary(documents: list[dict[str, Any]]) -> dict[str, Any]:
             for item in performance_stages
             if item.get("success_rate") is not None and item["success_rate"] >= 95
         ]
-        last = performance_stages[-1]
+        capacity_stages = [item for item in performance_stages if item["phase"] == "capacity"]
+        last = (capacity_stages or performance_stages)[-1]
         return {
             "mode": "perf",
             "total_requests": total,
@@ -152,7 +155,7 @@ def _normalized_summary(documents: list[dict[str, Any]]) -> dict[str, Any]:
                 "latency_p99_ms": last.get("latency_p99_ms"),
                 "stages": performance_stages,
             },
-            "token_usage": {"source_counts": {"api_usage": total}, "exact": True},
+            "token_usage": {"source_counts": {"backend_reported": total}, "exact": False},
         }
 
     benchmarks: list[dict[str, Any]] = []
