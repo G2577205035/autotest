@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -44,6 +45,7 @@ class InterfaceScenarioManager:
         for index in range(self.concurrency):
             worker = threading.Thread(
                 target=self._loop,
+                kwargs={"schedule": index == 0},
                 name=f"liema-interface-worker-{index + 1}",
                 daemon=True,
             )
@@ -164,9 +166,15 @@ class InterfaceScenarioManager:
                 )
             return current
 
-    def _loop(self) -> None:
+    def _loop(self, *, schedule: bool = False) -> None:
+        next_schedule_check = 0.0
         while not self._stop.is_set():
             try:
+                if schedule and time.monotonic() >= next_schedule_check:
+                    next_schedule_check = time.monotonic() + 1.0
+                    dispatched = self.platform_store.dispatch_interface_schedule()
+                    if dispatched and dispatched.get("queued"):
+                        self._notify_workers(dispatched["queued"])
                 if self.run_once():
                     continue
             except Exception as exc:

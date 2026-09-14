@@ -1003,7 +1003,7 @@ textarea{line-height:1.6}.field.compact{min-width:260px}.field.compact select{mi
 .interface-catalog-view > .table-wrap { flex:1; }
 .interface-scenario-history { overflow:hidden; }
 .interface-scenario-table { table-layout:fixed; }
-.interface-scenario-table td { overflow-wrap:anywhere; }
+.interface-scenario-table td { white-space:normal; overflow-wrap:anywhere; }
 @media(max-width:1180px) {
   #view-models .model-sidebar { display:flex; }
   .interface-settings-grid > .panel { min-height:0; }

@@ -1,0 +1,8 @@
+# Optional isolated UI test runtime. This file is not part of the Web image.
+# Build only when explicitly preparing the UI Runner environment.
+FROM mcr.microsoft.com/playwright:v1.63.0-noble
+WORKDIR /work
+RUN npm install --save-exact --ignore-scripts @playwright/test@1.63.0 && npm cache clean --force
+COPY deploy/ui-runner-launcher.cjs /opt/liema-ui-launcher.cjs
+USER 1000:1000
+ENTRYPOINT ["node", "/opt/liema-ui-launcher.cjs"]

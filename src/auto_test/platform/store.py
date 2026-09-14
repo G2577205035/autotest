@@ -12,6 +12,13 @@ from pathlib import Path
 from typing import Any
 
 from auto_test.evaluation.persistence import ModelEvaluationStoreMixin
+from auto_test.platform.interface_data import InterfaceDataStoreMixin
+from auto_test.platform.worker_rpc import WorkerMailbox
+from auto_test.common.env import get_env
+from auto_test.platform.enterprise import initialize_enterprise
+from auto_test.platform.model_access import initialize_model_access
+from auto_test.ui_automation.store import UiStore
+from auto_test.monitoring.performance_comparison import initialize_comparisons
 
 
 DEFAULT_REPORT_SECTIONS = [
@@ -30,7 +37,7 @@ DEFAULT_REPORT_SECTIONS = [
 ]
 
 
-class PlatformStore(ModelEvaluationStoreMixin):
+class PlatformStore(InterfaceDataStoreMixin, ModelEvaluationStoreMixin):
     """SQLite store for versioned settings and retryable report jobs."""
 
     backend = "sqlite"
@@ -541,6 +548,12 @@ class PlatformStore(ModelEvaluationStoreMixin):
 
     def _initialize_records(self, connection) -> None:
         """Seed defaults and recover jobs after a process restart."""
+        self.initialize_interface_data(connection)
+        WorkerMailbox.initialize(connection)
+        initialize_enterprise(connection)
+        UiStore.initialize(connection)
+        initialize_comparisons(connection)
+        initialize_model_access(connection)
         existing = connection.execute(
                 "SELECT * FROM report_templates WHERE id = 'default'"
             ).fetchone()
@@ -574,11 +587,12 @@ class PlatformStore(ModelEvaluationStoreMixin):
                    next_attempt_at=? WHERE status='running'""",
                 (time.time(),),
             )
-            connection.execute(
-                """UPDATE stress_jobs SET status='interrupted', message='服务重启后任务已中断',
-                   finished_at=? WHERE status='running'""",
-                (time.time(),),
-            )
+            if str(get_env("SERVER_EXECUTION_MODE", "embedded")).lower() != "external":
+                connection.execute(
+                    """UPDATE stress_jobs SET status='interrupted', message='服务重启后任务已中断',
+                       finished_at=? WHERE status='running'""",
+                    (time.time(),),
+                )
             connection.execute(
                 """UPDATE interface_scenario_runs
                    SET status='queued',started_at=NULL,stop_requested=0
@@ -1858,6 +1872,9 @@ class PlatformStore(ModelEvaluationStoreMixin):
 
     def delete_interface_scenario(self, project_id: str, scenario_id: str) -> bool:
         with self._connection() as connection:
+            self.lock_interface_dispatch(connection)
+            connection.execute("DELETE FROM interface_schedules WHERE project_id=? AND scenario_id=?", (project_id, scenario_id))
+            connection.execute("DELETE FROM interface_datasets WHERE project_id=? AND scenario_id=?", (project_id, scenario_id))
             deleted = connection.execute(
                 "DELETE FROM interface_scenarios WHERE id=? AND project_id=?",
                 (scenario_id, project_id),
@@ -1949,6 +1966,7 @@ class PlatformStore(ModelEvaluationStoreMixin):
 
     def claim_interface_scenario_run(self) -> dict[str, Any] | None:
         with self._connection() as connection:
+            self.lock_interface_dispatch(connection)
             row = connection.execute(
                 """SELECT queued.id,queued.project_id
                    FROM interface_scenario_runs AS queued

@@ -1,0 +1,11 @@
+# Build after the application image; the CLI talks to the host Docker engine.
+ARG LIEMA_APP_IMAGE
+FROM ${LIEMA_APP_IMAGE}
+USER root
+ARG DOCKER_CLI_SHA256
+COPY vendor/ui/docker /usr/local/bin/docker
+RUN test -n "$DOCKER_CLI_SHA256" \
+    && echo "$DOCKER_CLI_SHA256  /usr/local/bin/docker" | sha256sum --check \
+    && chmod 0755 /usr/local/bin/docker
+USER liema
+CMD ["python", "-m", "auto_test.ui_worker"]

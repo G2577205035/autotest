@@ -450,6 +450,11 @@ def build_docx(payload: dict[str, Any], summary: dict[str, Any], conclusion: dic
     _set_run_font(p.add_run(conclusion["text"]), size=10.5, color=INK)
     _set_table_geometry(callout, [9360])
 
+    benchmark = (payload.get('cpu_summary') or {}).get('benchmark') or {}
+    if benchmark:
+        doc.add_heading('CPU SHA-256 基准', level=1)
+        doc.add_paragraph('固定 1 MiB 数据块，预热 1 秒；100 MiB/s 对应 100 分。该分数只反映 SHA-256 工作负载吞吐，不代表综合硬件性能。')
+        _add_table(doc, ['版本', '吞吐 MiB/s', '基准分', '进程 / 时长'], [[benchmark.get('benchmark_version'), _fmt(benchmark.get('mib_per_second')), _fmt(benchmark.get('score')), f"{benchmark.get('workers')} / {benchmark.get('duration_s')} s"]], [3000, 2120, 2120, 2120])
     doc.add_heading("2. 四维性能摘要", level=1)
     metric_rows = [
         ["CPU 使用率", _fmt(summary["cpu_pct"].get("avg"), "%"), _fmt(summary["cpu_pct"].get("max"), "%"), "处理器负载"],
@@ -600,6 +605,11 @@ def build_pdf(payload: dict[str, Any], summary: dict[str, Any], conclusion: dict
     conclusion_table = Table([[Paragraph(f"<b>{conclusion['title']}</b><br/>{conclusion['text']}", body)]], colWidths=[6.5 * inch])
     conclusion_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.HexColor({"passed":"#E2F5EF","warning":"#FFF4D6","failed":"#FDEBEA"}.get(conclusion["level"], "#F2F4F7"))), ("BOX", (0, 0), (-1, -1), .4, colors.HexColor("#DDE3E7")), ("LEFTPADDING", (0, 0), (-1, -1), 9), ("RIGHTPADDING", (0, 0), (-1, -1), 9), ("TOPPADDING", (0, 0), (-1, -1), 9), ("BOTTOMPADDING", (0, 0), (-1, -1), 9)]))
     story.append(conclusion_table)
+    benchmark = (payload.get('cpu_summary') or {}).get('benchmark') or {}
+    if benchmark:
+        story.append(Paragraph('CPU SHA-256 基准', h1))
+        story.append(Paragraph('固定 1 MiB 数据块，预热 1 秒；100 MiB/s 对应 100 分。仅代表 SHA-256 吞吐，不代表综合硬件性能。', body))
+        story.append(table(['版本', '吞吐 MiB/s', '基准分', '进程 / 时长'], [[benchmark.get('benchmark_version'), _fmt(benchmark.get('mib_per_second')), _fmt(benchmark.get('score')), f"{benchmark.get('workers')} / {benchmark.get('duration_s')} s"]], [2.3 * inch, 1.4 * inch, 1.3 * inch, 1.5 * inch]))
     story.append(Paragraph("2. 四维性能摘要", h1))
     rows = [
         ["CPU 使用率", _fmt(summary["cpu_pct"].get("avg"), "%"), _fmt(summary["cpu_pct"].get("max"), "%")],

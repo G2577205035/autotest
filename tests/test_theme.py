@@ -33,8 +33,8 @@ page.click();assert.equal(page.saved,'dark');assert.equal(page.root.dataset.them
 page=boot(page.saved);assert.equal(page.root.dataset.theme,'dark');
 page.external('light');assert.equal(page.root.dataset.theme,'light');assert(page.buttons.every(b=>b.label.textContent==='深色模式'));
 page.events.storage({key:'unrelated'});assert.equal(page.root.dataset.theme,'light');
-for(const saved of [null,'invalid','<script>'])assert.equal(boot(saved).root.dataset.theme,'dark');
-page=boot(null,true);page.click();assert.equal(page.root.dataset.theme,'light');assert.equal(page.saved,null);
+for(const saved of [null,'invalid','<script>'])assert.equal(boot(saved).root.dataset.theme,'light');
+page=boot(null,true);page.click();assert.equal(page.root.dataset.theme,'dark');assert.equal(page.saved,null);
 """
         result = subprocess.run([node, "-e", script, str(STATIC / "theme.js")], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)

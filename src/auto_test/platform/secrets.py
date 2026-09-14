@@ -34,8 +34,15 @@ def decrypt_secret(ciphertext: str) -> str:
     if not ciphertext:
         return ""
     try:
-        return _fernet().decrypt(ciphertext.encode("ascii")).decode("utf-8")
+        value = _fernet().decrypt(ciphertext.encode("ascii")).decode("utf-8")
     except SecretEncryptionError:
         raise
     except Exception as exc:
         raise SecretEncryptionError("凭据无法解密，请检查 LIEMA_MASTER_KEY 是否与加密时一致") from exc
+    if value.startswith("vault://"):
+        from auto_test.platform.enterprise import resolve_secret_reference
+        try:
+            return resolve_secret_reference(value)
+        except Exception as exc:
+            raise SecretEncryptionError("外部 Vault 密钥无法读取，请检查运行身份、路径授权与证书") from exc
+    return value

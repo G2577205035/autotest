@@ -16,6 +16,8 @@ dependencies = [
   "matplotlib>=3.7.0",
   "fastapi>=0.115.0",
   "uvicorn>=0.30.0",
+  "httpx>=0.28.0,<1",
+  "websockets>=16.0,<17",
   "python-multipart>=0.0.9",
   "cryptography>=42.0.0",
   "python-docx>=1.1.0",
@@ -30,6 +32,8 @@ dependencies = [
 auto-test = "auto_test.pipeline.runner:main"
 auto-test-web = "auto_test.web:main"
 auto-test-worker = "auto_test.worker:main"
+auto-test-server-worker = "auto_test.server_worker:main"
+auto-test-ui-worker = "auto_test.ui_worker:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

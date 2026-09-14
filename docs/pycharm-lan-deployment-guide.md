@@ -1,7 +1,9 @@
 # 全新机器部署与旧平台换机手册
 
-> 更新日期：2026-09-10
-> 适用交付：`2026.09.10.3` 完整离线包；目标为 Linux x86_64/amd64。
+> 更新日期：2026-09-11
+> 适用交付：`2026.09.11.2` 服务器发布包；目标为 Linux x86_64/amd64。
+> 本版增加页面内 Playwright 录制与回放。基础 Web/Worker 启动后，按 [UI 服务器部署手册](ui-server-deployment.md) 载入录制/回放/代理/专用 Worker 镜像，配置目标允许列表并启用 `compose.ui.yml`。普通测试用户的电脑无需 Docker 或 Playwright。
+> 本次修复 AI 分析返回解析及失败原因提示，正文格式校验失败最多自动重试一次；修复双栏列表高度与分页贴底冲突，无新增生产配置项。升级后重新生成 AI 分析可应用新提示词与校验规则，原实测数据保持不变。
 > 本版为所有列表、报告章节和详情抽屉统一提供指定页跳转、每页条数选择与有界滚动；规范模型测试报告，补齐测试环境、方法和判定依据，并支持选择已配置模型生成可追溯 AI 综合分析；保留全量测评按钮、全部专项指标报告和可追溯证据 ZIP，保留真实模型验收发现的采样/评分/流式/报告修正，以及全局浅色/深色主题；主题在登录页与业务顶栏切换，浏览器按当前站点保存选择，无需新增服务器配置。
 > 本文从收到交付包开始。备份/恢复细节见 [部署、备份与回滚手册](deployment-backup-rollback-runbook.md)，本版本验收见 [发布记录](deployment-release-20260909.md)。
 
@@ -33,7 +35,7 @@ free -h
 ss -lnt
 ```
 
-ZIP 约 1.07 GB，镜像归档约 650 MB；加载后的镜像、解包依赖和备份另外占用空间。容量按“交付包 + 镜像 + 最大上传暂存 + 报告产物 + 至少一轮备份”规划。同机部署数据库等依赖时还要另计其数据与内存，不能只按 ZIP 大小准备磁盘。
+本版包含应用、UI Worker、录制、回放和代理五个镜像，合并镜像压缩归档约 2.0 GB，完整发布 ZIP 约 2.4 GB；以包内清单的实际字节数为准。加载后的镜像、解包依赖和备份另占空间。容量按“交付包 + 镜像 + 最大上传暂存 + 报告产物 + 至少一轮备份”规划，同机数据库等依赖的数据与内存另计。
 
 ### 2.2 三项外部依赖必须先准备好
 
@@ -60,8 +62,8 @@ Redis 密码为可选配置：服务端有密码就填写，没有密码就留�
 从发布记录登记的服务器版本目录，通过 SFTP/SCP 等受控通道取回以下两个文件；开发机已按空间清理要求不长期保留部署大包。目标账号、地址和目录由现场填写：
 
 ```text
-liema-auto-2026.09.10.3-release.zip
-liema-auto-2026.09.10.3-release.zip.sha256
+liema-auto-2026.09.11.2-release.zip
+liema-auto-2026.09.11.2-release.zip.sha256
 ```
 
 交付包不含生产 `.env.production`、开发 `config.local.yml`、主密钥、密码和平台数据。旧平台换机所需的这些材料按第 8 节分别安全转移。
@@ -72,7 +74,7 @@ liema-auto-2026.09.10.3-release.zip.sha256
 
 ```bash
 export LIEMA_DEPLOY_ROOT=/opt/liema-auto
-export LIEMA_RELEASE=2026.09.10.3
+export LIEMA_RELEASE=2026.09.11.2
 export LIEMA_STACK=liema
 export LIEMA_RELEASE_DIR="$LIEMA_DEPLOY_ROOT/releases/$LIEMA_RELEASE"
 export LIEMA_PACKAGE_DIR="$LIEMA_DEPLOY_ROOT/packages/$LIEMA_RELEASE"
@@ -95,7 +97,7 @@ docker image inspect "liema-auto:$LIEMA_RELEASE" \
 
 期望为 `linux/amd64`，镜像 ID 与包内 `RELEASE.json` 一致。用包内 `RELEASE.json` 的镜像 ID 校验，不沿用旧版本的 ID。
 
-加载完整成品镜像即可部署。`dependencies.tar.gz` 和 `evalscope.tar.gz` 用于离线重建；无需在新机联网安装 Python/EvalScope，也不能复制 Windows 虚拟环境代替 Linux 运行时。
+上述镜像归档一次加载五个镜像，具体 ID 见 `RELEASE.json`。随后按 UI 服务器手册启用 Compose 叠加服务；仅启动基础 Web/Worker 不会自动启动录制服务。`dependencies.tar.gz` 和 `evalscope.tar.gz` 用于应用镜像离线重建，UI 桌面镜像离线安装使用已验证的成品镜像；无需在新机联网安装 Python/EvalScope，也不能复制 Windows 虚拟环境代替 Linux 运行时。
 
 ## 4. 创建生产环境文件
 
@@ -113,7 +115,7 @@ install -m 0600 "$LIEMA_RELEASE_DIR/deploy/env.production.example" \
 | 变量 | 填写说明 |
 | --- | --- |
 | `COMPOSE_PROJECT_NAME` | 与 `LIEMA_STACK` 一致；不得与同一 Docker 主机上的其他项目冲突 |
-| `LIEMA_IMAGE` | 本版本为 `liema-auto:2026.09.10.3`，以后从对应 `RELEASE.json` 取值 |
+| `LIEMA_IMAGE` | 本版本为 `liema-auto:2026.09.11.2`，以后从对应 `RELEASE.json` 取值 |
 | `LIEMA_WEB_BIND` | 本机实际绑定地址；局域网直接访问时不能保留回环绑定 |
 | `LIEMA_WEB_PORT` | 经 `ss -lnt` 确认未占用的外部端口；容器内部固定 8080 |
 | `LIEMA_SESSION_COOKIE_SECURE` | 最终用户入口为受控 HTTP 时 `false`，HTTPS 时 `true` |

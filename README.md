@@ -19,6 +19,10 @@
 
 ## 本地启动页面
 
+本地新增能力保持按需启用：接口中心的场景操作提供“数据与计划”，支持 JSON/CSV 参数集和按分钟间隔运行；定时执行由现有 Worker 负责。创建计划后首轮在一个间隔后执行，上轮未完成或停机错过的周期会跳过。
+
+服务器执行默认仍为 `embedded`，兼容原启动方式。需启用独立服务器进程时，在 Web 和普通 Worker 的 PyCharm 环境变量设置 `LIEMA_SERVER_EXECUTION_MODE=external`，另建 Python 模块运行配置 `auto_test.server_worker`（或安装后的 `auto-test-server-worker` 命令）；三者使用相同平台存储与主密钥。独立进程不监听 HTTP 端口，SSH 会话、监控采样和压测均由它持有，多个 Web 实例共用。`/health` 的 `server_worker.available` 可查看在线状态。异常退出后必须先确认旧进程已停止，待租约过期再以 `--recover-stale` 启动；历史运行标记中断并重新授权，不会自动重复启动负载。本轮未修改实际运行配置或启动服务器 Worker。
+
 建议使用 Python 3.11 或更高版本：
 
 ~~~powershell
@@ -212,8 +216,18 @@ python main.py
 
 ## 项目入口
 
+2026-09-10 本地新增接口数据计划、UI 自动化、模型项目授权、企业接入、CPU 固定基准与性能对比。页面入口、配置变量、Worker 启动方式及明确的外部待验范围统一见 [本地开发功能说明](docs/development-features-20260910.md)。相关代码随 `2026.09.11.1` 发布；本次启用并实测的是 UI 录制/回放。SSO/Vault 和独立 Server Worker 仍为可选配置，未切换现场企业接入或服务器执行模式。
+
+2026-09-11 新增页面内 Playwright 录制首版：从“UI 自动化 → 录制新套件”打开录制窗口，添加检查点后加密保存为套件版本，复用回放和报告。实际 Docker 录制、蓝鲨登录/任务列表检查、保存、回放与产物下载已验收；操作方式见 [页面内录制说明](docs/ui-browser-recording.md)，安装和升级见 [UI 服务器部署手册](docs/ui-server-deployment.md)。
+
+首次使用请先进入 **UI 自动化 → 录制环境设置**，录制弹窗内也有同名入口。窗口逐项展示组件、镜像、测试网络与录制服务状态，平台管理员可保存本机运行配置，并查看可复制的准备/启动命令。其他账号可查看状态、联系平台管理员。服务器模式已由管理员准备镜像、网络和服务，普通用户电脑无需 Docker；本机安装模式才需要在对应主机准备组件。设置保存在忽略提交的 `config/ui-runtime.local.json`，环境变量优先；Web 与 UI Worker 使用同一项目安装目录。
+
 - `main.py`：兼容的命令行入口，实际调用 `auto_test.pipeline.runner`。
 - `web_main.py`：兼容的 Web 入口，实际加载 `auto_test.web`。
 - `deploy/`：Compose、生产环境变量模板、在线/离线镜像与 GPU burn 镜像定义。
 - `PROJECT_STRUCTURE.md`：接手导航、目录职责和层级变更维护规则。
 - 安装项目后也可以使用 `auto-test` 和 `auto-test-web` 命令。
+- 独立服务器执行：`python -m auto_test.server_worker` / `auto-test-server-worker`。
+- 独立浏览器测试：`python -m auto_test.ui_worker` / `auto-test-ui-worker`，仅使用预先准备的 Docker 镜像。
+
+2026-09-11 已发布 `2026.09.11.2`：页面录制支持扩大工作区、浏览器与代码窗口等高、原始大小/全屏及预期结果验证指引；正式录制、保存、回放和产物下载复验通过。刷新平台后新建录制即可体验，详见 [录制使用说明](docs/ui-browser-recording.md) 与 [服务器部署手册](docs/ui-server-deployment.md)。

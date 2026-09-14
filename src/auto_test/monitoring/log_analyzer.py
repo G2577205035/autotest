@@ -6,7 +6,7 @@ from auto_test.common.logging import log
 
 
 def analyze_errors(error_files, llm_api_key, llm_api_url, llm_model, run_dir,
-                   stress_summary=None):
+                   stress_summary=None, *, model_call=None):
     """
     分析 Docker 错误日志 + 压测报告，合并写入 analysis.md。
     """
@@ -22,6 +22,15 @@ def analyze_errors(error_files, llm_api_key, llm_api_url, llm_model, run_dir,
 
     api_url = llm_api_url.rstrip("/")
     all_answers = []
+
+    def invoke(prompt):
+        if model_call is None:
+            return _call_llm(api_url, llm_api_key, llm_model, prompt)
+        try:
+            return model_call(prompt)
+        except Exception as exc:
+            log.warning('模型日志分析未完成：%s', type(exc).__name__)
+            return ''
 
     # Docker 错误日志分析
     sections = []
@@ -41,7 +50,7 @@ def analyze_errors(error_files, llm_api_key, llm_api_url, llm_model, run_dir,
             + "\n".join(sections)
         )
         log.info(f"LLM 分析（错误日志）：调用 {llm_model}")
-        answer = _call_llm(api_url, llm_api_key, llm_model, prompt)
+        answer = invoke(prompt)
         if answer:
             all_answers.append("## 错误日志分析\n\n" + answer)
 
@@ -68,7 +77,7 @@ def analyze_errors(error_files, llm_api_key, llm_api_url, llm_model, run_dir,
                 + stress_content
             )
             log.info(f"LLM 分析（压测报告）：调用 {llm_model}")
-            answer = _call_llm(api_url, llm_api_key, llm_model, prompt)
+            answer = invoke(prompt)
             if answer:
                 all_answers.append("## 压测结果分析\n\n" + answer)
 

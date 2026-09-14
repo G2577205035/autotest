@@ -1,14 +1,15 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark light">
   <title>烈马自动化测试平台</title>
   <link rel="icon" type="image/png" href="/static/assets/liema-favicon.png">
-  <script src="/static/theme.js?v=20260910.4"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=20260910.4">
-  <link rel="stylesheet" href="/static/theme.css?v=20260910.4">
+  <script src="/static/theme.js?v=20260911.ui2"></script>
+  <link rel="stylesheet" href="/static/styles.css?v=20260911.ui2">
+  <link rel="stylesheet" href="/static/theme.css?v=20260911.ui3">
+  <link rel="stylesheet" href="/static/ui-recorder.css?v=20260911.rec4">
 </head>
 <body>
   <div class="auth-overlay" id="authOverlay" data-mode="login">
@@ -39,6 +40,7 @@
             <label class="field auth-field"><span>用户名</span><input id="loginUsername" autocomplete="username" required placeholder="请输入平台用户名"></label>
             <label class="field auth-field"><span>密码</span><input id="loginPassword" type="password" autocomplete="current-password" required placeholder="请输入登录密码"></label>
             <button class="button primary wide auth-submit" type="submit">登录</button>
+            <a class="button secondary wide hidden" id="oidcLoginLink" href="/api/auth/oidc/start">企业账号登录</a>
             <p class="form-error" id="loginError" role="alert"></p>
           </form>
           <form id="setupForm" class="auth-form hidden">
@@ -61,7 +63,7 @@
   </div>
 
   <div class="shell app-locked" id="appShell">
-    <aside class="sidebar">
+    <aside class="sidebar" id="appSidebar" aria-label="主导航">
       <div class="brand"><div class="brand-mark"><img src="/static/assets/liema-logo.png" alt=""></div><strong>烈马自动化测试平台</strong></div>
       <nav id="mainNav">
         <div class="nav-section-label">测试工作台</div>
@@ -70,6 +72,7 @@
         <button class="nav-item" data-view="monitor"><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17l4-5 4 3 4-7 4 3M4 20h16"/></svg></span>实时监控</button>
         <button class="nav-item" data-view="stress"><span><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="5" rx="1"/><rect x="4" y="14" width="16" height="5" rx="1"/><path d="M8 8h.01M8 17h.01M12 8h5M12 17h5"/></svg></span>服务器性能</button>
         <div class="nav-section-label">平台能力</div>
+        <button class="nav-item" data-view="ui-automation"><span><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18m-12 4 4 2-4 2Z"/></svg></span>UI 自动化</button>
         <button class="nav-item" data-view="reports"><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l3 3v15H6zM15 3v4h4M9 12h6M9 16h6"/></svg></span>报告中心</button>
         <button class="nav-item" data-view="evaluation"><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8M8 12h3M8 16h5"/><path d="m14 14 1.5 1.5L18 13"/></svg></span>模型评测</button>
         <button class="nav-item" data-view="models"><span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1A7 7 0 0 0 15 6l-.3-2.6h-4L10.4 6a7 7 0 0 0-1.5.9l-2.4-1-2 3.4 2 1.5a7 7 0 0 0 0 2.2l-2 1.5 2 3.4 2.4-1A7 7 0 0 0 10.4 18l.3 2.6h4L15 18a7 7 0 0 0 1.5-.9l2.4 1 2-3.4-2-1.5a7 7 0 0 0 .1-1.2Z"/></svg></span>模型配置</button>
@@ -79,9 +82,10 @@
       <div class="side-status"><i></i><div><strong>本地服务</strong><span id="sideHealth">正在连接</span></div></div>
     </aside>
 
+    <button class="sidebar-backdrop" type="button" aria-label="关闭导航" tabindex="-1" hidden></button>
     <main class="workspace">
       <header class="topbar">
-        <div class="page-heading"><h1 id="pageTitle">运行总览</h1><p id="pageSubtitle">任务状态、质量指标与最近运行</p></div>
+        <div class="page-heading"><button class="sidebar-toggle" id="sidebarToggle" type="button" aria-label="收起导航" aria-controls="appSidebar" aria-expanded="true" title="收起导航"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16m7-12-3 4 3 4"/></svg></button><div class="page-title-group"><h1 id="pageTitle">运行总览</h1><p id="pageSubtitle">任务状态、质量指标与最近运行</p></div></div>
         <div class="top-actions">
           <label class="project-switcher"><span>业务项目</span><select id="projectSwitcher" aria-label="切换业务项目"></select></label>
           <button class="user-chip" id="userChip" type="button" title="当前登录用户"><span id="userAvatar">—</span><b id="currentUserName">—</b><small id="currentUserRole">—</small></button>
@@ -278,6 +282,7 @@
 
             <details class="advanced-options stress-advanced">
               <summary>测试参数与安全保护</summary>
+              <label class="switch-row"><input id="stressCpuBenchmark" type="checkbox"><span><b>CPU SHA-256 基准</b><small>测量固定工作负载吞吐；选择后设为仅 CPU、100% 负载、1 个进程、60 秒，可比较同参数任务。需要目标机 Python 3。</small></span></label>
               <div class="form-grid two">
                 <label class="field"><span>持续时间（秒）</span><input id="stressDuration" type="number" min="10" max="86400" value="60"></label>
                 <label class="field"><span>CPU 目标负载（%）</span><input id="stressCpuLoad" type="number" min="1" max="100" value="80"></label>
@@ -348,7 +353,7 @@
           </aside>
         </article>
         <article class="panel hidden" data-workspace-panel="stress" data-workspace-name="history">
-          <div class="panel-head"><div><p class="eyebrow">PERFORMANCE REPORTS</p><h3>服务器性能测试记录</h3></div><div class="report-actions stress-report-picker"><select id="stressReportJobSelect" aria-label="选择性能报告"></select><button class="text-button" id="downloadStressDocxButton">下载 DOCX</button><button class="text-button" id="downloadStressPdfButton">下载 PDF</button></div></div>
+          <div class="panel-head"><div><p class="eyebrow">PERFORMANCE REPORTS</p><h3>服务器性能测试记录</h3></div><div class="report-actions stress-report-picker"><button class="button secondary" type="button" id="openPerformanceComparison">性能对比与趋势</button><select id="stressReportJobSelect" aria-label="选择性能报告"></select><button class="text-button" id="downloadStressDocxButton">下载 DOCX</button><button class="text-button" id="downloadStressPdfButton">下载 PDF</button></div></div>
           <select id="stressJobSelect" class="hidden" aria-hidden="true"></select>
           <div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="服务器性能报告与任务，可滚动查看"><table><thead><tr><th>服务器</th><th>测试方案</th><th>状态</th><th>开始时间</th><th>结果说明</th><th>操作</th></tr></thead><tbody id="stressJobsBody"></tbody></table></div><footer class="table-pagination list-pagination" id="stressJobsPagination" aria-label="服务器性能报告与任务分页"></footer>
         </article>
@@ -361,7 +366,7 @@
           <button type="button" data-workspace-tab="reports" data-workspace-target="jobs">报告任务</button>
         </div>
         <div class="page-grid report-layout">
-          <form class="panel" id="reportForm" data-workspace-panel="reports" data-workspace-name="create"><div class="panel-head"><h3>创建报告</h3><span class="step-chip">DOCX + PDF</span></div><label class="field"><span>来源运行</span><select id="reportRunSelect" required></select></label><div class="form-grid two"><label class="field"><span>报告标题</span><input id="reportTitle" value="烈马自动化测试平台性能测试报告"></label><label class="field"><span>编制单位</span><input id="reportPreparedBy" value="质量与性能测试团队"></label></div><label class="field"><span>测试背景补充</span><textarea id="reportOverview" rows="3" placeholder="项目背景、验收范围或测试目标"></textarea></label><label class="field"><span>测试环境补充</span><textarea id="reportEnvironment" rows="3" placeholder="版本、部署拓扑、服务器型号等现场信息"></textarea></label><label class="field"><span>综合结论（留空则自动生成）</span><textarea id="reportConclusion" rows="4" placeholder="可人工定稿；留空时按规则或模型生成"></textarea></label><label class="switch-row"><input id="useModelConclusion" type="checkbox"><span><b>使用启用中的模型生成结论</b><small>模型不可用时自动降级为规则结论，不阻断报告。</small></span></label><button class="button primary wide" type="submit">提交报告生成任务</button></form>
+          <form class="panel" id="reportForm" data-workspace-panel="reports" data-workspace-name="create"><div class="panel-head"><h3>创建报告</h3><span class="step-chip">DOCX + PDF</span></div><label class="field"><span>来源运行</span><select id="reportRunSelect" required></select></label><label class="field"><span>报告标题</span><input id="reportTitle" value="烈马自动化测试平台性能测试报告"></label><p class="muted">选择运行即可生成完整报告；环境与实测结果自动读取。</p><details class="advanced-options report-optional-settings"><summary>补充说明与 AI 分析（选填）</summary><div class="form-grid two"><label class="field"><span>编制单位</span><input id="reportPreparedBy" value="质量与性能测试团队"></label></div><label class="field"><span>测试背景补充</span><textarea id="reportOverview" rows="3" placeholder="项目背景、验收范围或测试目标"></textarea></label><label class="field"><span>测试环境补充</span><textarea id="reportEnvironment" rows="3" placeholder="版本、部署拓扑、服务器型号等现场信息"></textarea></label><label class="field"><span>综合结论（留空则自动生成）</span><textarea id="reportConclusion" rows="4" placeholder="可人工定稿；留空时按规则或模型生成"></textarea></label><label class="switch-row"><input id="useModelConclusion" type="checkbox"><span><b>使用启用中的模型生成结论</b><small>模型不可用时自动降级为规则结论，不阻断报告。</small></span></label></details><button class="button primary wide" type="submit">提交报告生成任务</button></form>
           <article class="panel hidden" data-workspace-panel="reports" data-workspace-name="template"><div class="panel-head"><div><p class="eyebrow">TEMPLATE</p><h3>六章内容结构</h3></div><div class="report-actions"><input class="template-name" id="templateName" value="企业性能测试报告"><button class="button secondary" id="saveTemplateButton">保存模板</button></div></div><div id="templateSections" class="section-editor"></div></article>
         </div>
         <article class="panel hidden" data-workspace-panel="reports" data-workspace-name="jobs"><div class="panel-head"><div><p class="eyebrow">ARTIFACTS</p><h3>报告任务与产物</h3></div><button class="text-button" id="refreshReportsButton">刷新</button></div><div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="报告任务，可滚动查看"><table><thead><tr><th>任务</th><th>来源运行</th><th>模板</th><th>状态</th><th>尝试</th><th>产物</th></tr></thead><tbody id="reportJobsBody"></tbody></table></div><footer class="table-pagination list-pagination" id="reportJobsPagination" aria-label="报告任务分页"></footer></article>
@@ -461,7 +466,7 @@
 
       <section class="view" id="view-models">
         <div class="page-grid form-layout">
-          <form class="panel" id="modelForm"><div class="panel-head"><div><p class="eyebrow">MODEL REGISTRY</p><h3>模型配置</h3></div><span class="secure-badge">密文存储</span></div><input type="hidden" id="modelId"><div class="form-grid two"><label class="field"><span>配置名称</span><input id="modelName" placeholder="生产报告模型" required></label><label class="field"><span>供应商协议</span><select id="modelProvider"><option value="openai-compatible">OpenAI Compatible</option></select></label></div><label class="field"><span>Base URL</span><input id="modelBaseUrl" type="url" placeholder="https://api.example.com/v1" required></label><div class="form-grid two"><label class="field"><span>模型名称</span><input id="modelModelName" placeholder="deepseek-chat" required></label><label class="field"><span>API Key</span><input id="modelApiKey" type="password" autocomplete="new-password" placeholder="更新时留空代表保持原 Key"></label></div><div class="form-grid two"><label class="field"><span>Temperature</span><input id="modelTemperature" type="number" min="0" max="2" step="0.1" value="0.3"></label><label class="field"><span>最大 Tokens</span><input id="modelMaxTokens" type="number" min="64" max="128000" value="2000"></label></div><label class="field"><span>系统提示词</span><textarea id="modelPrompt" rows="4" placeholder="你是企业软件测试报告助手。"></textarea></label><label class="switch-row"><input id="modelActive" type="checkbox" checked><span><b>保存后设为启用模型</b><small>同一时间只会有一个启用中的模型。</small></span></label><button class="button primary wide" type="submit">保存模型配置</button><p class="form-error" id="modelFormError"></p></form>
+          <form class="panel" id="modelForm"><div class="panel-head"><div><p class="eyebrow">MODEL REGISTRY</p><h3>模型配置</h3></div><span class="secure-badge">密文存储</span></div><input type="hidden" id="modelId"><div class="form-grid two"><label class="field"><span>配置名称</span><input id="modelName" placeholder="生产报告模型" required></label><label class="field"><span>供应商协议</span><select id="modelProvider"><option value="openai-compatible">OpenAI Compatible</option></select></label></div><label class="field"><span>Base URL</span><input id="modelBaseUrl" type="url" placeholder="https://api.example.com/v1" required></label><div class="form-grid two"><label class="field"><span>模型名称</span><input id="modelModelName" placeholder="deepseek-chat" required></label><label class="field"><span>API Key</span><input id="modelApiKey" type="password" autocomplete="new-password" placeholder="Key 或 vault://挂载名/路径#字段；更新时留空保留"></label></div><div class="form-grid two"><label class="field"><span>Temperature</span><input id="modelTemperature" type="number" min="0" max="2" step="0.1" value="0.3"></label><label class="field"><span>最大 Tokens</span><input id="modelMaxTokens" type="number" min="64" max="128000" value="2000"></label></div><label class="field"><span>系统提示词</span><textarea id="modelPrompt" rows="4" placeholder="你是企业软件测试报告助手。"></textarea></label><label class="switch-row"><input id="modelActive" type="checkbox" checked><span><b>保存后设为启用模型</b><small>同一时间只会有一个启用中的模型。</small></span></label><button class="button primary wide" type="submit">保存模型配置</button><p class="form-error" id="modelFormError"></p></form>
           <aside class="model-sidebar">
             <details class="security-note" aria-labelledby="modelSecurityTitle">
               <summary class="security-note-head">
@@ -496,6 +501,7 @@
           <div class="interface-catalog-layout">
             <aside class="interface-tree-panel" aria-label="项目与接口模块">
               <div class="interface-tree-head"><div><span>接口目录</span><small>按业务模块组织 HTTP 接口</small></div></div>
+              <label class="interface-tree-search"><span aria-hidden="true"></span><input id="interfaceModuleSearch" type="search" placeholder="搜索模块" aria-label="搜索接口模块"></label>
               <div class="interface-project-field"><div class="interface-project-field-head"><span>当前业务项目</span><button class="project-manage" id="manageCurrentProjectButton" type="button">编辑项目</button></div><select id="interfaceProjectSwitcher" aria-label="切换接口中心业务项目"></select></div>
               <section class="interface-project-tree">
                 <div class="interface-project-node">
@@ -504,8 +510,7 @@
                   <b id="interfaceAssetCount">0</b>
                 </div>
                 <div class="interface-tree-overview"><span><b id="interfaceModuleCount">0</b> 个模块</span><span><b id="interfacePublishedCount">0</b> 已发布</span></div>
-                <label class="interface-tree-search"><span aria-hidden="true"></span><input id="interfaceModuleSearch" type="search" placeholder="搜索模块" aria-label="搜索接口模块"></label>
-                <div class="interface-module-section-head"><span>模块目录</span><button class="interface-manage" id="newInterfaceModuleButton" type="button">＋ 新建模块</button></div>
+                <div class="interface-module-section-head"><button class="interface-module-collapse" id="interfaceModuleCollapse" type="button" aria-expanded="true" aria-controls="interfaceModuleList"><i aria-hidden="true"></i><span>模块目录</span></button><button class="interface-manage" id="newInterfaceModuleButton" type="button">＋ 新建模块</button></div>
                 <nav class="interface-module-list" id="interfaceModuleList" aria-label="接口模块列表"></nav>
               </section>
               <div class="interface-tree-footer"><span><b id="interfaceEnvironmentCount">0</b> 个运行环境</span><button type="button" data-interface-workspace-target="settings">管理环境与变量</button></div>
@@ -582,12 +587,14 @@
         <div class="hidden" data-workspace-panel="interfaces" data-workspace-name="scenarios">
           <section class="interface-scenario-workspace">
             <div class="interface-scenario-catalog" id="interfaceScenarioCatalog">
+              <section class="interface-scenario-list-card" aria-label="接口自动化场景列表">
               <header class="interface-scenario-head">
                 <div><p class="eyebrow">CHAINED API TESTING</p><h3>接口自动化场景</h3><p>按顺序串联接口，提取响应变量并完成业务断言；执行结果自动生成 DOCX/PDF 报告。</p></div>
                 <div class="interface-scenario-head-actions"><button class="button secondary interface-execute" id="batchRunInterfaceScenariosButton" type="button" disabled>批量运行</button><button class="button primary interface-manage" id="newInterfaceScenarioButton" type="button">＋ 新建场景</button></div>
               </header>
               <div class="interface-scenario-summary"><span><b id="interfaceScenarioCount">0</b> 个场景</span><span><b id="interfaceScenarioSelectedCount">0</b> 个已选择</span><span>批量执行并发上限 <b>5</b></span></div>
               <div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="接口场景，可滚动查看"><table class="interface-scenario-table"><thead><tr><th><input id="interfaceScenarioSelectAll" type="checkbox" aria-label="选择本页场景"></th><th>场景</th><th>环境</th><th>步骤</th><th>最近执行</th><th>操作</th></tr></thead><tbody id="interfaceScenarioBody"></tbody></table></div><footer class="table-pagination list-pagination" id="interfaceScenariosPagination" aria-label="接口场景分页"></footer>
+              </section>
               <section class="interface-scenario-history"><div class="panel-head"><div><p class="eyebrow">RECENT RUNS</p><h3>最近场景执行</h3></div><span id="interfaceScenarioRunCount">0 条</span></div><div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="场景执行报告，可滚动查看"><table><thead><tr><th>执行时间</th><th>场景</th><th>结果</th><th>步骤</th><th>耗时</th><th>报告</th></tr></thead><tbody id="interfaceScenarioRunBody"></tbody></table></div><footer class="table-pagination list-pagination" id="interfaceScenarioRunsPagination" aria-label="场景执行报告分页"></footer></section>
             </div>
             <section class="interface-scenario-editor hidden" id="interfaceScenarioEditor">
@@ -620,9 +627,9 @@
         </div>
 
         <div class="hidden" data-workspace-panel="interfaces" data-workspace-name="import">
-          <div class="page-grid form-layout">
-            <form class="panel" id="interfaceForm"><div class="panel-head"><div><p class="eyebrow">VERSIONED CONTRACT</p><h3>导入接口定义</h3></div><span class="step-chip">JSON / YAML / OpenAPI / cURL</span></div><div class="form-grid two"><label class="field"><span>接口名称</span><input id="interfaceName" placeholder="例如：内网 LMT 翻译" required></label><label class="field"><span>归属模块</span><select id="interfaceImportModule"><option value="">未分组</option></select></label><label class="field"><span>运行环境</span><select id="interfaceImportEnvironment"><option value="">不绑定环境</option></select></label></div><label class="field"><span>接口内容</span><textarea id="interfaceContent" class="code-input" rows="15" placeholder='{"method":"POST","url":"https://api.example.test/v1/translate"}' required></textarea></label><label class="switch-row"><input id="interfacePublish" type="checkbox"><span><b>导入后发布当前版本</b><small>不勾选时保存为草稿，可继续编辑后再发布。</small></span></label><button class="button primary wide" type="submit">解析并创建接口</button></form>
-            <aside class="panel"><p class="eyebrow">GUARDRAILS</p><h3>安全自适应边界</h3><div class="guardrail"><b>可自适应</b><span>协议、主机、端口、HTTP 方法、URL path</span></div><div class="guardrail"><b>项目隔离</b><span>导入结果只进入当前项目，模块与环境引用不能跨项目</span></div><div class="guardrail"><b>不会执行</b><span>粘贴内容中的脚本、Shell 或任意 Python</span></div><div class="callout"><strong>推荐上线流程</strong><p>先保存草稿，在预生产完成连通性与契约测试后，再发布版本。历史版本保持只读。</p></div></aside>
+          <div class="interface-import-layout">
+            <form class="panel" id="interfaceForm"><details class="interface-import-help"><summary aria-label="安全自适应边界帮助"><span aria-hidden="true">?</span></summary><aside class="interface-help-content"><p class="eyebrow">GUARDRAILS</p><h3>安全自适应边界</h3><div class="guardrail"><b>可自适应</b><span>协议、主机、端口、HTTP 方法、URL path</span></div><div class="guardrail"><b>项目隔离</b><span>导入结果只进入当前项目，模块与环境引用不能跨项目</span></div><div class="guardrail"><b>不会执行</b><span>粘贴内容中的脚本、Shell 或任意 Python</span></div><div class="callout"><strong>推荐上线流程</strong><p>先保存草稿，在预生产完成连通性与契约测试后，再发布版本。历史版本保持只读。</p></div></aside></details><div class="panel-head"><div><p class="eyebrow">VERSIONED CONTRACT</p><h3>导入接口定义</h3></div><span class="step-chip">JSON / YAML / OpenAPI / cURL</span></div><div class="form-grid interface-import-fields"><label class="field"><span>接口名称</span><input id="interfaceName" placeholder="例如：内网 LMT 翻译" required></label><label class="field"><span>归属模块</span><select id="interfaceImportModule"><option value="">未分组</option></select></label><label class="field"><span>运行环境</span><select id="interfaceImportEnvironment"><option value="">不绑定环境</option></select></label></div><label class="field"><span>接口内容</span><textarea id="interfaceContent" class="code-input" rows="15" placeholder='{"method":"POST","url":"https://api.example.test/v1/translate"}' required></textarea></label><div class="interface-import-submit"><label class="switch-row"><input id="interfacePublish" type="checkbox"><span><b>导入后发布当前版本</b><small>不勾选时保存为草稿，可继续编辑后再发布。</small></span></label><button class="button primary wide" type="submit">解析并创建接口</button></div></form>
+
           </div>
         </div>
 
@@ -641,7 +648,7 @@
       <section class="view" id="view-identity">
         <header class="identity-workspace-head">
           <div><h2>用户管理</h2><p>集中维护平台账号、业务项目、角色边界与安全审计。</p></div>
-          <div class="identity-head-actions"><button class="button secondary hidden" id="newIdentityProjectButton" type="button" data-identity-open="project">＋ 新增项目</button><button class="button primary" id="newIdentityUserButton" type="button" data-identity-open="user">＋ 新增用户</button></div>
+          <div class="identity-head-actions"><button class="button secondary" type="button" data-enterprise-bindings>企业账号绑定</button><button class="button secondary hidden" id="newIdentityProjectButton" type="button" data-identity-open="project">＋ 新增项目</button><button class="button primary" id="newIdentityUserButton" type="button" data-identity-open="user">＋ 新增用户</button></div>
         </header>
 
         <nav class="identity-tabs" aria-label="用户与权限分类" role="tablist">
@@ -719,9 +726,81 @@
           <div class="identity-drawer-body"><label class="field"><span>管理项目</span><select id="membershipProjectSelect"></select></label><form class="membership-toolbar" id="membershipForm"><label class="field"><span>选择用户</span><select id="membershipUserSelect" required></select></label><label class="field"><span>项目角色</span><select id="membershipRoleSelect"><option value="viewer">只读成员</option><option value="tester">测试执行者</option><option value="project_admin">项目管理员</option></select></label><button class="button secondary" type="submit">保存成员权限</button></form><div class="identity-member-list"><div class="identity-member-list-head"><strong>已授权成员</strong><span id="identityMemberCount">0 人</span></div><div class="table-wrap paged-scroll" tabindex="0" role="region" aria-label="项目成员，可滚动查看"><table><thead><tr><th>成员</th><th>项目角色</th><th>状态</th><th>操作</th></tr></thead><tbody id="identityMembersBody"></tbody></table></div><footer class="table-pagination list-pagination" id="identityMembersPagination" aria-label="项目成员分页"></footer></div></div>
         </dialog>
       </section>
+      <section class="view" id="view-ui-automation">
+        <div class="panel-head"><div><h3>浏览器测试套件</h3><p class="muted" id="uiRunnerStatus">正在读取执行环境…</p></div><div class="table-actions ui-workspace-actions"><button class="button ghost" type="button" id="uiEnvironmentOpen">录制环境设置</button><button class="button secondary" type="button" id="uiNewSuite">导入套件</button><button class="button primary" type="button" id="uiRecordNew">录制新套件</button></div></div>
+        <div class="ui-workspace-grid">
+          <article class="panel"><div class="panel-head"><h3>套件与版本</h3><input id="uiSuiteFilter" placeholder="搜索套件" aria-label="搜索套件"></div><div class="table-wrap paged-scroll" tabindex="0"><table><thead><tr><th>套件</th><th>版本</th><th>操作</th></tr></thead><tbody id="uiSuitesBody"></tbody></table></div><p class="muted ui-panel-note">每次保存新增版本；运行使用提交时的固定快照。</p></article>
+          <article class="panel"><div class="panel-head"><h3>运行记录</h3><button class="button ghost" type="button" id="uiRefresh">刷新</button></div><div class="table-wrap paged-scroll" tabindex="0"><table><thead><tr><th>运行</th><th>状态</th><th>通过 / 失败</th><th>操作</th></tr></thead><tbody id="uiRunsBody"></tbody></table></div><footer class="table-pagination ui-pagination"><span id="uiRunPageSummary"></span><div class="pagination-controls"><label>每页 <select id="uiRunPageSize"><option>20</option><option>50</option><option>100</option></select></label><button type="button" id="uiRunPrev">上一页</button><button type="button" id="uiRunNext">下一页</button></div></footer></article>
+        </div>
+        <article class="panel hidden" id="uiRunDetail"><div class="panel-head"><h3>运行详情</h3><button type="button" class="button ghost" id="uiCloseDetail">收起</button></div><div class="ui-detail-body" id="uiRunDetailBody"></div></article>
+        <dialog class="interface-dialog ui-suite-dialog" id="uiSuiteDialog" aria-labelledby="uiSuiteDialogTitle"><form id="uiSuiteForm"><div class="dialog-head"><h3 id="uiSuiteDialogTitle">导入 UI 套件</h3><button type="button" class="dialog-close" id="uiCloseSuite" aria-label="关闭">×</button></div><div class="ui-suite-fields"><div class="ui-form-grid"><label class="field"><span>套件名称</span><input id="uiSuiteName" required maxlength="120"></label><label class="field"><span>测试环境地址</span><input type="url" id="uiSuiteUrl" placeholder="使用内部测试网络中的应用地址"></label><label class="field"><span>最长运行时间（秒）</span><input id="uiSuiteTimeout" type="number" min="10" max="900" value="120" required></label></div><label class="field"><span>导入 Playwright 文件（最多 20 个）</span><input id="uiSuiteFiles" type="file" multiple accept=".js,.ts,.cjs"><small>支持 *.spec.js / *.spec.ts / *.test.cjs 等测试文件；不导入依赖或配置文件。</small></label><label class="field"><span>当前脚本</span><select id="uiScriptSelect"></select><textarea id="uiScriptContent" rows="12" spellcheck="false"></textarea></label><label class="field"><span>普通参数（JSON）</span><textarea id="uiSuiteParameters" rows="3" spellcheck="false">{}</textarea><small>脚本可读取 process.env.LIEMA_UI_PARAMETERS 指向的 JSON 文件；请勿在脚本和参数中填写密码或密钥。</small></label><p class="form-error" id="uiSuiteError" role="alert"></p><div class="report-actions"><button class="button primary" type="submit">保存为新版本</button><button class="button secondary" type="button" id="uiSuiteExample">填入本地页面示例</button></div></div></form></dialog>
+        <dialog class="interface-dialog ui-recorder-dialog" id="uiRecorderDialog" aria-labelledby="uiRecorderTitle">
+          <div class="dialog-head"><h3 id="uiRecorderTitle">录制浏览器测试</h3><button class="dialog-close" type="button" id="uiRecorderClose" aria-label="关闭录制窗口">×</button></div>
+          <div class="ui-recorder-body">
+            <div class="ui-recorder-environment-notice" id="uiRecorderNotice"><div><strong id="uiRecorderEnvironmentTitle">录制服务状态</strong><p class="muted" id="uiRecorderEnvironment" role="status">正在检查录制环境…</p></div><button class="button secondary" type="button" id="uiRecorderEnvironmentOpen">录制环境设置</button></div>
+            <form id="uiRecorderForm"><div class="ui-form-grid"><label class="field"><span>套件名称</span><input id="uiRecordingName" required maxlength="120" placeholder="例如：登录后查看任务列表"></label><label class="field"><span>测试网站地址</span><input type="url" id="uiRecordingUrl" required maxlength="2000" placeholder="https://测试网站地址"></label></div><p class="muted">打开后直接操作网页，再添加至少一个“预期结果”验证，例如检查登录后的标题是否出现。录制窗口提供“如何添加验证”说明，完成后保存为可运行的测试。</p><button class="button primary" type="submit" id="uiRecorderStart" disabled>打开网站并录制</button></form>
+            <div id="uiRecorderLive" class="hidden">
+              <div class="ui-recorder-toolbar">
+                <p id="uiRecorderState" role="status"></p>
+                <div class="table-actions">
+                  <button class="button secondary" type="button" id="uiRecorderCheckHelp" aria-expanded="false" aria-controls="uiRecorderCheckGuide">如何添加验证</button>
+                  <button class="button secondary" type="button" id="uiRecorderScale" aria-pressed="false" title="按原始大小显示，可滚动查看完整画面">原始大小</button>
+                  <button class="button secondary" type="button" id="uiRecorderFullscreen">全屏</button>
+                  <button class="button secondary" type="button" id="uiRecorderReconnect">重连窗口</button>
+                  <button class="button primary" type="button" id="uiRecorderSave">完成并保存</button>
+                </div>
+              </div>
+              <div class="ui-recorder-viewport">
+                <iframe id="uiRecorderFrame" title="Playwright 浏览器录制窗口" referrerpolicy="no-referrer"></iframe>
+                <aside id="uiRecorderCheckGuide" class="ui-recorder-check-guide" aria-labelledby="uiRecorderCheckTitle" hidden>
+                  <div class="ui-recorder-guide-head"><strong id="uiRecorderCheckTitle">添加一个“预期结果”验证</strong><button class="dialog-close" type="button" id="uiRecorderCheckClose" aria-label="收起验证说明">×</button></div>
+                  <p>检查点就是告诉测试：出现什么结果才算成功。点击和输入只会记录操作。</p>
+                  <ol><li>在左侧网页操作到要验证的结果，例如打开任务列表。</li><li>在网页顶部的录制工具栏，点击 <strong>Assert visibility</strong>（验证可见），再点击应出现的标题或结果区域。</li><li>右侧代码出现 <code>await expect(…)</code> 后，点击平台的 <strong>完成并保存</strong>。</li></ol>
+                  <p class="muted">要检查具体内容，使用 <strong>Assert text</strong>（验证文字）或 <strong>Assert value</strong>（验证输入值），填写预期内容后点击 ✓ 确认。</p>
+                </aside>
+              </div>
+              <div class="ui-recorder-toolbar ui-recorder-footer"><span class="muted" id="uiRecorderDeadline"></span><button class="text-button danger-text" type="button" id="uiRecorderCancel">取消本次录制</button></div>
+            </div>
+            <div class="hidden" id="uiRecorderResume"></div><p class="form-error" id="uiRecorderError" role="alert"></p>
+          </div>
+        </dialog>
+        <dialog class="interface-dialog ui-environment-dialog" id="uiEnvironmentDialog" aria-labelledby="uiEnvironmentTitle">
+          <div class="dialog-head"><div><h3 id="uiEnvironmentTitle">录制环境设置</h3><p class="muted">管理员首次配置一次，各项目即可共用录制服务。</p></div><button class="dialog-close" type="button" id="uiEnvironmentClose" aria-label="关闭录制环境设置">×</button></div>
+          <div class="ui-environment-body">
+            <div class="ui-environment-summary"><div><strong id="uiEnvironmentSummary">正在读取运行状态…</strong><p class="muted" id="uiEnvironmentScope">这里配置录制服务，测试网站地址在“录制新套件”中填写。</p></div><div class="ui-environment-shortcuts"><button class="button secondary" type="button" id="uiEnvironmentRefresh">刷新状态</button><button class="text-button" type="button" id="uiEnvironmentGuideOpen">查看准备与启动步骤</button></div></div>
+            <ol class="ui-environment-checks" id="uiEnvironmentChecks" aria-label="录制运行条件"></ol>
+            <p class="muted" id="uiEnvironmentPermission"></p>
+            <form id="uiEnvironmentForm" class="hidden"><h4>填写已有的运行环境</h4><p class="muted">镜像需先在本机准备好。填写后保存，再按下方说明启动录制服务。</p>
+              <label class="field"><span>回放镜像 ID</span><input id="uiEnvironmentRunnerImage" maxlength="500" placeholder="sha256:…" autocomplete="off" spellcheck="false"><small>用于执行已保存的测试套件；填写 docker image inspect 输出的固定 ID。</small></label>
+              <label class="field"><span>录制镜像 ID</span><input id="uiEnvironmentRecorderImage" maxlength="500" placeholder="sha256:…" autocomplete="off" spellcheck="false"><small>包含 Playwright 浏览器与页面录制窗口。</small></label>
+              <label class="field"><span>专用测试网络</span><input id="uiEnvironmentNetwork" maxlength="101" placeholder="例如：liema-ui-test" required autocomplete="off" spellcheck="false"><small>必须是已创建的 Docker Internal 网络；测试网站需在此网络中可达。</small></label>
+              <div class="ui-environment-form-footer"><button class="button primary" type="submit" id="uiEnvironmentSave">保存配置</button><span class="muted">保存到当前安装实例。Web 无需重启；UI Worker 下次启动时读取。</span></div>
+            </form>
+            <details class="ui-environment-guide" id="uiEnvironmentGuide"><summary>首次使用？查看准备与启动步骤</summary><p class="muted">在项目根目录的 PowerShell 中按需执行。以下操作需要手动完成，保存配置不会自动安装或启动服务。</p>
+              <h4>1. 准备运行组件</h4><p>安装并启动 <a href="https://docs.docker.com/desktop/setup/install/windows-install/" target="_blank" rel="noopener noreferrer">Docker Desktop（Windows 官方说明）</a>，使用 Linux 容器。在启动 Web 的同一 Python 环境安装录制组件：</p><div class="ui-environment-command"><pre id="uiEnvironmentInstallCommand">python -m pip install "httpx&gt;=0.28.0,&lt;1" "websockets&gt;=16.0,&lt;17"</pre><button type="button" class="text-button" data-ui-copy-command="uiEnvironmentInstallCommand">复制命令</button></div>
+              <h4>2. 准备镜像并获取 ID</h4><p class="muted">首次构建需要下载依赖，完成后将两个 inspect 输出分别填入上方。已有离线镜像时直接使用其 ID。</p><div class="ui-environment-command"><pre id="uiEnvironmentImagesCommand">docker build -f deploy/Dockerfile.ui-runner -t liema-ui-runner:local .
+docker build -f deploy/docker/Dockerfile.ui-recorder -t liema-ui-recorder:local .
+docker image inspect liema-ui-runner:local --format '{{.Id}}'
+docker image inspect liema-ui-recorder:local --format '{{.Id}}'</pre><button type="button" class="text-button" data-ui-copy-command="uiEnvironmentImagesCommand">复制命令</button></div>
+              <h4>3. 准备测试网络</h4><p class="muted">已有专用 Internal 网络可直接填写其名称。下面的示例只创建测试网络；测试网站还需接入该网络或受控代理，普通内网网址不会自动可达。</p><div class="ui-environment-command"><pre id="uiEnvironmentNetworkCommand">docker network create --internal liema-ui-test</pre><button type="button" class="text-button" data-ui-copy-command="uiEnvironmentNetworkCommand">复制命令</button></div>
+              <h4>4. 保存配置并启动录制服务</h4><p class="muted">保存后另开一个终端，在本项目目录运行以下命令并保持终端开启。Web 与 UI Worker 需在同一主机网络命名空间运行。</p><div class="ui-environment-command"><pre id="uiEnvironmentWorkerCommand">$env:PYTHONPATH = (Join-Path (Get-Location) 'src')
+python -m auto_test.ui_worker</pre><button type="button" class="text-button" data-ui-copy-command="uiEnvironmentWorkerCommand">复制命令</button></div><p class="muted">再点“刷新状态”。需要修改配置时，在 UI Worker 终端按 Ctrl+C 停止服务，保存后重新启动。环境变量中已有的配置优先，页面会标为只读。</p>
+            </details>
+            <p class="form-error" id="uiEnvironmentError" role="alert"></p><p id="uiEnvironmentFeedback" role="status"></p>
+          </div>
+        </dialog>
+      </section>
     </main>
   </div>
   <div id="toastArea" class="toast-area"></div>
-  <script src="/static/app.js?v=20260910.4" defer></script>
+  <dialog class="interface-dialog enterprise-settings-dialog" id="enterpriseSettingsDialog" aria-labelledby="enterpriseSettingsTitle"><div class="dialog-head"><h3 id="enterpriseSettingsTitle">企业接入</h3><button class="dialog-close" type="button" data-enterprise-close aria-label="关闭">×</button></div><div data-enterprise-body></div></dialog>
+  <dialog class="interface-dialog automation-data-dialog" id="interfaceAutomationDialog" aria-labelledby="interfaceAutomationTitle"><div class="dialog-head"><h3 id="interfaceAutomationTitle">数据与计划</h3><button class="dialog-close" type="button" data-automation-close aria-label="关闭">×</button></div><div data-automation-body></div></dialog>
+  <script src="/static/app.js?v=20260911.ui2" defer></script>
+  <script src="/static/interface-automation.js?v=20260911.ui2" defer></script>
+  <script src="/static/enterprise-settings.js?v=20260911.ui2" defer></script>
+  <script src="/static/ui-automation.js?v=20260911.rec2" defer></script>
+  <script src="/static/ui-recorder.js?v=20260911.rec4" defer></script>
+  <script src="/static/performance-comparison.js?v=20260911.ui2" defer></script>
+  <dialog class="interface-dialog performance-comparison-dialog" id="performanceComparisonDialog" aria-labelledby="performanceComparisonTitle"><div class="dialog-head"><h3 id="performanceComparisonTitle">性能对比与趋势</h3><button class="dialog-close" type="button" id="closePerformanceComparison" aria-label="关闭">×</button></div><div class="performance-comparison-body"><div class="ui-form-grid"><label class="field"><span>最近 100 条任务（选中 2～6 条，第一条为基准）</span><div class="performance-run-options" id="performanceRunOptions"></div></label><div><label class="switch-row"><input type="checkbox" id="performanceAllowMismatch"><span>允许不同参数并列展示（不排名）</span></label><button class="button primary" type="button" id="createPerformanceComparison">生成对比报告</button><label class="field"><span>已保存对比</span><select id="savedPerformanceComparison"><option value="">选择已保存报告</option></select></label><button class="button secondary" type="button" id="showPerformanceTrend">查看首选任务的服务器趋势</button></div></div><p class="form-error" role="alert" id="performanceComparisonError"></p><div id="performanceComparisonResult"></div></div></dialog>
 </body>
 </html>

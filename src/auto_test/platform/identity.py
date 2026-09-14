@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from auto_test.common.env import get_env
 from auto_test.platform.contracts import PlatformRepository
+from auto_test.platform.enterprise import OidcService, register_oidc_routes
 
 
 SESSION_COOKIE = "liema_session"
@@ -127,14 +128,14 @@ def _client_ip(request: Request) -> str:
     return str(request.client.host if request.client else "")[:100]
 
 
-def _set_session_cookie(response: Response, token: str) -> None:
+def _set_session_cookie(response: Response, token: str, *, secure: bool | None = None) -> None:
     secure_value = str(get_env("SESSION_COOKIE_SECURE", "false")).strip().lower()
     response.set_cookie(
         SESSION_COOKIE,
         token,
         max_age=SESSION_TTL_SECONDS,
         httponly=True,
-        secure=secure_value in {"1", "true", "yes", "on"},
+        secure=(secure_value in {"1", "true", "yes", "on"}) if secure is None else secure,
         samesite="lax",
         path="/",
     )
@@ -414,6 +415,7 @@ def create_identity_api(
     service = IdentityService(store)
     login_limiter = LoginAttemptLimiter()
     router = APIRouter(prefix="/api")
+    register_oidc_routes(router, service)
 
     @router.get("/auth/status")
     async def auth_status(request: Request, response: Response):
@@ -421,6 +423,7 @@ def create_identity_api(
         result: dict[str, Any] = {
             "setup_required": service.setup_required,
             "authenticated": False,
+            "sso_enabled": OidcService(store).enabled and not service.setup_required,
         }
         authenticated = service.authenticate_token(request.cookies.get(SESSION_COOKIE, ""))
         if not authenticated:
@@ -704,10 +707,16 @@ PUBLIC_PATHS = {
     "/api/auth/status",
     "/api/auth/setup",
     "/api/auth/login",
+    "/api/auth/oidc/start",
+    "/api/auth/oidc/callback",
 }
 
 
 def _required_permission(method: str, path: str) -> str:
+    if method == 'POST' and path == '/api/stress-comparisons':
+        return 'report:manage'
+    if method not in {'GET', 'HEAD', 'OPTIONS'} and path.startswith('/api/ui-'):
+        return 'interface:manage' if path.startswith(('/api/ui-suites', '/api/ui-recordings')) else 'test:execute'
     if method in {"GET", "HEAD", "OPTIONS"} and path.startswith(
         "/api/model-evaluation/"
     ):
@@ -719,7 +728,7 @@ def _required_permission(method: str, path: str) -> str:
     if method == "POST" and re.fullmatch(r"/api/model-evaluation/runs/[^/]+/report/conclusion", path):
         return "report:manage"
     if path == "/api/interface-scenarios/batch-execute" or re.fullmatch(
-        r"/api/interface-scenarios/[^/]+/execute", path
+        r"/api/interface-scenarios/[^/]+/(?:execute|data-execute)", path
     ):
         return "test:execute"
     if method == "DELETE" and re.fullmatch(r"/api/model-evaluation/runs/[^/]+", path):
@@ -740,6 +749,8 @@ def _required_permission(method: str, path: str) -> str:
         "/api/interface-environments",
         "/api/interface-variables",
         "/api/interface-scenarios",
+        "/api/interface-datasets",
+        "/api/interface-schedules",
         "/api/interface-specs/import",
     )
     if any(path == prefix or path.startswith(prefix + "/") for prefix in project_interface_assets):

@@ -33,9 +33,12 @@ from auto_test.common.config_loader import (
 from auto_test.common.paths import PROJECT_ROOT, UPLOADS_DIR, prepare_runtime_layout
 from auto_test.monitoring.server_stress import ServerStressManager
 from auto_test.monitoring.server_sessions import ServerSessionManager
+from auto_test.monitoring.remote_server import RemoteServerSessions, RemoteServerStress, server_execution_mode
 from auto_test.platform.artifact_storage import ArtifactStorage, create_artifact_storage
 from auto_test.platform.contracts import PlatformRepository, TaskRepository
 from auto_test.platform.interface_specs import parse_curl_request, parse_endpoint_text
+from auto_test.platform.interface_data_api import create_interface_data_api
+from auto_test.platform.model_access import ProjectModelStore, get_model_access, set_model_access
 from auto_test.platform.models import ModelSecretError, public_profile, save_profile, test_profile
 from auto_test.platform.persistence import create_platform_repository
 from auto_test.platform.secrets import SecretEncryptionError, decrypt_secret, encrypt_secret
@@ -314,6 +317,11 @@ class ModelProfileInput(BaseModel):
     is_active: bool = False
 
 
+class ModelAccessInput(BaseModel):
+    restricted: bool = False
+    project_ids: list[str] = Field(default_factory=list, max_length=200)
+
+
 class ModelEvaluationRunInput(BaseModel):
     run_kind: str = Field(default="mock", max_length=40)
     plan: str = Field(default="quick", max_length=40)
@@ -487,6 +495,7 @@ class StressJobInput(BaseModel):
     duration: int = Field(default=60, ge=10, le=86400)
     workers: int = Field(default=0, ge=0, le=4096)
     cpu_load: int = Field(default=80, ge=1, le=100)
+    cpu_benchmark: bool = False
     gpu_burn_source: str = Field(default="", max_length=1000)
     gpu_burn_image: str = Field(default="", max_length=500)
     gpu_burn_blackwell_image: str = Field(default="", max_length=500)
@@ -586,6 +595,9 @@ def create_platform_api(
         artifact_storage,
         session_manager=server_session_manager,
     )
+    if server_execution_mode() == "external":
+        server_session_manager = RemoteServerSessions(platform_store)
+        stress_manager = RemoteServerStress(platform_store, server_session_manager)
     model_evaluation_manager = ModelEvaluationManager(
         platform_store,
         artifact_storage,
@@ -594,12 +606,17 @@ def create_platform_api(
     )
     setattr(report_manager, "model_evaluation_manager", model_evaluation_manager)
     router = APIRouter(prefix="/api")
+    from auto_test.ui_automation.api import register_ui_api
+    register_ui_api(platform_store, artifact_storage, router)
 
     def identity_context(request: Request) -> dict[str, Any]:
         return getattr(request.state, "identity", {}) or {}
 
     def current_project_id(request: Request) -> str:
         return str((identity_context(request).get("current_project") or {}).get("id") or "")
+
+    def project_models(request: Request):
+        return ProjectModelStore(platform_store, current_project_id(request), str((identity_context(request).get("user") or {}).get("id") or ""))
 
     def ensure_model_evaluation_report(
         project_id: str, run_id: str, analyze: bool = False, model_profile_id: str = ""
@@ -627,7 +644,7 @@ def create_platform_api(
         else:
             root = artifact_storage.workspace("model-evaluations", project_id, run_id)
             artifact_ref = artifact_storage.reference(root)
-        generated = generate_model_evaluation_report(run, results, root, **({"model_store": platform_store, "model_profile_id": model_profile_id} if analyze else {}))
+        generated = generate_model_evaluation_report(run, results, root, **({"model_store": ProjectModelStore(platform_store, project_id), "model_profile_id": model_profile_id} if analyze else {}))
         artifact_storage.publish_tree(root)
         if str(run.get("artifact_ref") or "") != artifact_ref:
             platform_store.set_model_eval_run_artifact_ref(
@@ -665,6 +682,8 @@ def create_platform_api(
             session = server_session_manager.get(session_id, touch=touch)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="server session not found") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail="服务器会话服务暂不可用，请检查 Server Worker") from exc
         if not visible_server_session(session, request):
             raise HTTPException(status_code=404, detail="server session not found")
         return session
@@ -1281,6 +1300,7 @@ def create_platform_api(
         concurrency=int(task_queue_cfg().get("interface_concurrency") or 5),
     )
     setattr(report_manager, "interface_scenario_manager", interface_scenario_manager)
+    create_interface_data_api(platform_store, interface_scenario_manager, router=router)
 
     def runtime_override_spec(
         project_id: str, asset: dict[str, Any]
@@ -1434,8 +1454,28 @@ def create_platform_api(
         return {"metrics": metrics, "last_id": metrics[-1]["id"] if metrics else after_id}
 
     @router.get("/model-profiles")
-    async def list_models():
-        return {"profiles": [public_profile(item) for item in platform_store.list_model_profiles()]}
+    async def list_models(request: Request):
+        model_store = platform_store if (identity_context(request).get("user") or {}).get("is_superuser") else project_models(request)
+        return {"profiles": [public_profile(item) for item in await run_in_threadpool(model_store.list_model_profiles)]}
+
+    @router.get("/model-profiles/{profile_id}/access")
+    async def model_access(profile_id: str, request: Request):
+        if not (identity_context(request).get("user") or {}).get("is_superuser"):
+            raise HTTPException(403, "模型项目授权仅限平台管理员")
+        if not platform_store.get_model_profile(profile_id):
+            raise HTTPException(404, "模型配置不存在")
+        return await run_in_threadpool(get_model_access, platform_store, profile_id)
+
+    @router.put("/model-profiles/{profile_id}/access")
+    async def update_model_access(profile_id: str, payload: ModelAccessInput, request: Request):
+        if not (identity_context(request).get("user") or {}).get("is_superuser"):
+            raise HTTPException(403, "模型项目授权仅限平台管理员")
+        try:
+            return await run_in_threadpool(set_model_access, platform_store, profile_id, payload.restricted, payload.project_ids)
+        except KeyError as exc:
+            raise HTTPException(404, "模型配置不存在") from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @router.post("/model-profiles", status_code=201)
     async def create_or_update_model(payload: ModelProfileInput):
@@ -1455,9 +1495,9 @@ def create_platform_api(
         return {"success": True}
 
     @router.post("/model-profiles/{profile_id}/test")
-    async def test_model_connection(profile_id: str):
+    async def test_model_connection(profile_id: str, request: Request):
         try:
-            return await run_in_threadpool(test_profile, platform_store, profile_id)
+            return await run_in_threadpool(test_profile, project_models(request), profile_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="model profile not found") from exc
         except Exception as exc:
@@ -1477,7 +1517,7 @@ def create_platform_api(
         comparisons = await run_in_threadpool(
             platform_store.list_model_eval_comparisons, project_id, 50
         )
-        profiles = await run_in_threadpool(platform_store.list_model_profiles)
+        profiles = await run_in_threadpool(project_models(request).list_model_profiles)
         evaluation_config = dict(model_evaluation_cfg())
         runtime_value = str(
             get_env("EVALSCOPE_PYTHON", evaluation_config.get("evalscope_python") or "") or ""
@@ -1743,7 +1783,7 @@ def create_platform_api(
             if not payload.model_profile_id:
                 raise HTTPException(status_code=400, detail="请选择已配置的被测模型")
             profile = await run_in_threadpool(
-                platform_store.get_model_profile, payload.model_profile_id
+                project_models(request).get_model_profile, payload.model_profile_id
             )
             if not profile:
                 raise HTTPException(status_code=404, detail="model profile not found")
@@ -1754,7 +1794,7 @@ def create_platform_api(
             if payload.judge_model_profile_id == payload.model_profile_id:
                 raise HTTPException(status_code=400, detail="裁判模型必须独立于被测模型")
             judge_profile = await run_in_threadpool(
-                platform_store.get_model_profile, payload.judge_model_profile_id
+                project_models(request).get_model_profile, payload.judge_model_profile_id
             )
             if not judge_profile:
                 raise HTTPException(status_code=404, detail="judge model profile not found")
@@ -1774,7 +1814,7 @@ def create_platform_api(
                 "server_name": asset.get("name") or asset["host"], "scope": "saved_server_live_sampling",
             }
         if payload.server_session_id:
-            session = get_visible_server_session(payload.server_session_id, request)
+            session = await run_in_threadpool(get_visible_server_session, payload.server_session_id, request)
             metric_payload = await run_in_threadpool(
                 server_session_manager.metrics, payload.server_session_id, 0, 5000
             )
@@ -2891,12 +2931,12 @@ def create_platform_api(
 
     @router.get("/server-profiles")
     async def list_server_profiles():
-        return {"profiles": server_session_manager.list_profiles()}
+        return {"profiles": await run_in_threadpool(server_session_manager.list_profiles)}
 
     @router.post("/server-profiles", status_code=201)
     async def create_server_profile(payload: ServerProfileInput):
         try:
-            return server_session_manager.save_profile(payload.model_dump())
+            return await run_in_threadpool(server_session_manager.save_profile, payload.model_dump())
         except SecretEncryptionError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except RuntimeError as exc:
@@ -2905,7 +2945,7 @@ def create_platform_api(
     @router.put("/server-profiles/{profile_id}")
     async def update_server_profile(profile_id: str, payload: ServerProfileInput):
         try:
-            return server_session_manager.save_profile(
+            return await run_in_threadpool(server_session_manager.save_profile,
                 {"id": profile_id, **payload.model_dump()}
             )
         except SecretEncryptionError as exc:
@@ -2916,7 +2956,7 @@ def create_platform_api(
     @router.delete("/server-profiles/{profile_id}")
     async def delete_server_profile(profile_id: str):
         try:
-            deleted = server_session_manager.delete_profile(profile_id)
+            deleted = await run_in_threadpool(server_session_manager.delete_profile, profile_id)
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if not deleted:
@@ -2928,7 +2968,7 @@ def create_platform_api(
         return {
             "sessions": [
                 item
-                for item in server_session_manager.list_sessions()
+                for item in await run_in_threadpool(server_session_manager.list_sessions)
                 if visible_server_session(item, request)
             ]
         }
@@ -2941,7 +2981,7 @@ def create_platform_api(
             data["_created_by_user_id"] = str(
                 (identity_context(request).get("user") or {}).get("id") or ""
             )
-            return server_session_manager.connect(data)
+            return await run_in_threadpool(server_session_manager.connect, data)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="server profile not found") from exc
         except SecretEncryptionError as exc:
@@ -2951,11 +2991,11 @@ def create_platform_api(
 
     @router.get("/server-sessions/{session_id}")
     async def get_server_session(session_id: str, request: Request):
-        return get_visible_server_session(session_id, request)
+        return await run_in_threadpool(get_visible_server_session, session_id, request)
 
     @router.post("/server-sessions/{session_id}/heartbeat")
     async def heartbeat_server_session(session_id: str, request: Request):
-        return get_visible_server_session(session_id, request, touch=True)
+        return await run_in_threadpool(get_visible_server_session, session_id, request, touch=True)
 
     @router.get("/server-sessions/{session_id}/metrics")
     async def get_server_session_metrics(
@@ -2964,12 +3004,12 @@ def create_platform_api(
         after_id: int = Query(default=0, ge=0),
         limit: int = Query(default=5000, ge=1, le=20000),
     ):
-        get_visible_server_session(session_id, request)
-        return server_session_manager.metrics(session_id, after_id, limit)
+        await run_in_threadpool(get_visible_server_session, session_id, request)
+        return await run_in_threadpool(server_session_manager.metrics, session_id, after_id, limit)
 
     @router.post("/server-sessions/{session_id}/stop")
     async def stop_server_session(session_id: str, request: Request):
-        get_visible_server_session(session_id, request)
+        await run_in_threadpool(get_visible_server_session, session_id, request)
         try:
             return await run_in_threadpool(server_session_manager.close, session_id)
         except KeyError as exc:
@@ -2984,13 +3024,15 @@ def create_platform_api(
         if not data["modes"]:
             data["modes"] = ["monitor"]
         try:
-            return stress_manager.probe(data)
+            return await run_in_threadpool(stress_manager.probe, data)
         except RuntimeError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/stress-jobs", status_code=202)
     async def create_stress_job(payload: StressJobInput, request: Request):
         data = payload.model_dump()
+        if data.get('cpu_benchmark') and ('cpu' not in data['modes'] or 'gpu' in data['modes'] or not 10 <= data['duration'] <= 300 or not 1 <= data['workers'] <= 64 or data['cpu_load'] != 100):
+            raise HTTPException(400, 'CPU 基准需仅选择 CPU 负载、100% 负载、1～64 个进程和 10～300 秒')
         data["_project_id"] = current_project_id(request)
         data["_created_by_user_id"] = str(
             (identity_context(request).get("user") or {}).get("id") or ""
@@ -3002,7 +3044,7 @@ def create_platform_api(
             raise HTTPException(status_code=400, detail="至少选择一种压测模式")
         if data.get("session_id"):
             try:
-                session = get_visible_server_session(
+                session = await run_in_threadpool(get_visible_server_session,
                     data["session_id"], request, touch=True
                 )
             except HTTPException as exc:
@@ -3018,7 +3060,7 @@ def create_platform_api(
             raise HTTPException(status_code=400, detail="请先连接服务器会话")
         data["target_name"] = data.get("server_name") or data["host"]
         try:
-            return stress_manager.submit(data)
+            return await run_in_threadpool(stress_manager.submit, data)
         except KeyError as exc:
             raise HTTPException(status_code=409, detail="服务器会话已关闭，请重新连接") from exc
         except SecretEncryptionError as exc:
@@ -3050,7 +3092,7 @@ def create_platform_api(
         if not job or not visible_in_project(job, request):
             raise HTTPException(status_code=404, detail="stress job not found")
         try:
-            return stress_manager.request_stop(job_id)
+            return await run_in_threadpool(stress_manager.request_stop, job_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="stress job not found") from exc
 
@@ -3081,4 +3123,6 @@ def create_platform_api(
     async def download_stress_report_format(job_id: str, format_name: str, request: Request):
         return _stress_report_response(job_id, format_name, request)
 
+    from auto_test.platform.performance_api import register_performance_api
+    register_performance_api(router, platform_store, artifact_storage, visible_in_project)
     return router, report_manager, platform_store, stress_manager

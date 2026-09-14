@@ -6,6 +6,7 @@ import json
 import os
 import re
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -93,6 +94,8 @@ def _resolve_request_secrets(
     model_profile_id: str,
 ) -> dict[str, str]:
     resolved: dict[str, str] = {}
+    if model_profile_id and not platform_store.get_model_profile(model_profile_id):
+        raise RuntimeError("被测模型配置不存在或项目未获授权")
     source_name = str(task_config.pop("api_key_env", "") or "").strip()
     if source_name:
         if not _ENV_NAME.fullmatch(source_name):
@@ -235,6 +238,8 @@ class ModelEvaluationManager:
         backend: EvaluationBackend | None = None
         work_dir = None
         resource_sampler = None
+        invoked = False
+        started = time.monotonic()
         try:
             backend = self.backend_resolver(run)
             work_dir = self.artifact_storage.workspace(
@@ -244,16 +249,17 @@ class ModelEvaluationManager:
             from auto_test.evaluation.resources import capture_execution_environment
             test_environment = capture_execution_environment()
             (work_dir / "test_environment.json").write_text(json.dumps(test_environment, ensure_ascii=False, indent=2), encoding="utf-8")
+            task_config = dict(snapshot.get("task_config") or {})
+            from auto_test.platform.model_access import ProjectModelStore
+            secret_env = _resolve_request_secrets(
+                task_config,
+                platform_store=ProjectModelStore(self.platform_store, project_id),
+                model_profile_id=str(run.get("model_profile_id") or ""),
+            )
             if snapshot.get("resource_binding"):
                 from auto_test.evaluation.resources import EvaluationResourceSampler
                 resource_sampler = EvaluationResourceSampler(self.platform_store, snapshot["resource_binding"], work_dir)
                 resource_sampler.start()
-            task_config = dict(snapshot.get("task_config") or {})
-            secret_env = _resolve_request_secrets(
-                task_config,
-                platform_store=self.platform_store,
-                model_profile_id=str(run.get("model_profile_id") or ""),
-            )
             request = EvaluationRequest(
                 run_id=run_id,
                 project_id=project_id,
@@ -267,6 +273,7 @@ class ModelEvaluationManager:
             )
             with self._active_lock:
                 self._active_backend[run_id] = backend
+            invoked = True
             result = backend.run(
                 request,
                 on_event=lambda event: self._record_event(project_id, run_id, event),
@@ -306,6 +313,16 @@ class ModelEvaluationManager:
                 resource_sampler.close()
             with self._active_lock:
                 self._active_backend.pop(run_id, None)
+            if invoked and run.get("backend") != "mock":
+                current = self.platform_store.get_model_eval_run(project_id, run_id) or {}
+                self.platform_store.add_audit_event(
+                    actor_user_id=run.get("created_by") or None, project_id=project_id,
+                    action="model.evaluation.invoke", target_type="model_eval_run", target_id=run_id,
+                    outcome=current.get("status", "failed"),
+                    detail={"model_profile_id": run.get("model_profile_id"),
+                            "judge_profile_id": (task_config.get("judge") or {}).get("profile_id"),
+                            "elapsed_ms": round((time.monotonic() - started) * 1000, 1), "scope": "run"},
+                )
 
     def _persist_case_results(
         self, project_id: str, run_id: str, raw: dict[str, Any]

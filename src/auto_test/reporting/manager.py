@@ -58,6 +58,11 @@ class ReportManager:
         self._notify_worker()
         return job
 
+    def _project_models(self, job):
+        from auto_test.platform.model_access import ProjectModelStore
+        options = job.get("options") or {}
+        return ProjectModelStore(self.platform_store, str(options.get("_project_id") or ""), str(options.get("_created_by_user_id") or ""))
+
     def _execute(self, job: dict) -> None:
         try:
             run = self.task_store.get_run(job["run_id"])
@@ -67,7 +72,7 @@ class ReportManager:
                 self.task_store.get_translation_progress_events(job["run_id"])
             )
             snapshot, artifacts = build_report_artifacts(
-                run, metrics, template, job["options"], job["id"], self.platform_store,
+                run, metrics, template, job["options"], job["id"], self._project_models(job),
                 self.artifact_storage, translation_speed=translation_speed,
             )
             if self.artifact_storage:

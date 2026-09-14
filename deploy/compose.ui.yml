@@ -1,0 +1,42 @@
+# Overlay for compose.external.yml. Only the UI Worker can use the Docker socket.
+services:
+  web:
+    environment: &ui-environment
+      LIEMA_UI_RUNNER_IMAGE: ${LIEMA_UI_RUNNER_IMAGE:?Fixed runner image ID required}
+      LIEMA_UI_RECORDER_IMAGE: ${LIEMA_UI_RECORDER_IMAGE:?Fixed recorder image ID required}
+      LIEMA_UI_RUNNER_NETWORK: ${LIEMA_UI_RUNNER_NETWORK:-liema-ui-test}
+      LIEMA_UI_RECORDER_CONNECT_MODE: network
+      LIEMA_UI_BROWSER_PROXY: http://ui-proxy:3128
+    networks: [default, ui-test]
+
+  ui-worker:
+    extends:
+      file: compose.external.yml
+      service: worker
+    image: ${LIEMA_UI_WORKER_IMAGE:?UI Worker image required}
+    command: ["python", "-m", "auto_test.ui_worker"]
+    environment: *ui-environment
+    group_add:
+      - "${LIEMA_DOCKER_GID:?Docker socket group ID required}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [default, ui-test]
+    stop_grace_period: 70s
+    depends_on: [ui-proxy]
+
+  ui-proxy:
+    image: ${LIEMA_UI_PROXY_IMAGE:?Fixed Squid image ID required}
+    entrypoint: ["squid"]
+    command: ["-N", "-f", "/etc/squid/squid.conf"]
+    restart: unless-stopped
+    volumes:
+      - ${LIEMA_UI_PROXY_CONFIG:?Absolute allowlist configuration path required}:/etc/squid/squid.conf:ro
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=16m,mode=1777
+      - /run:rw,nosuid,nodev,size=8m,mode=755
+    networks: [default, ui-test]
+
+networks:
+  ui-test:
+    name: ${LIEMA_UI_RUNNER_NETWORK:-liema-ui-test}
+    internal: true

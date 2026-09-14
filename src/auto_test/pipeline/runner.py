@@ -731,7 +731,12 @@ def run_pipeline(progress_callback=None, metric_callback=None, run_id=None, opti
             if gpu_ssh and gpu_ssh is not app_ssh:
                 gpu_ssh.disconnect()
             try:
-                llm = get_active_model_config()
+                from auto_test.platform.persistence import create_platform_repository
+                from auto_test.platform.model_access import ProjectModelStore
+                from auto_test.common.paths import PROJECT_ROOT
+                model_store = create_platform_repository(PROJECT_ROOT, recover_jobs=False)
+                scoped_models = ProjectModelStore(model_store, str(options.get('_project_id') or ''), str(options.get('_created_by_user_id') or ''))
+                llm = get_active_model_config(model_store, project_id=scoped_models.project_id)
             except ModelSecretError as exc:
                 llm = {}
                 log.warning(f"模型配置不可用，跳过错误日志智能分析：{exc}")
@@ -741,6 +746,7 @@ def run_pipeline(progress_callback=None, metric_callback=None, run_id=None, opti
                     error_files, llm["api_key"], llm["api_url"],
                     llm["model"], str(run_dir),
                     stress_summary=str(stress_summary) if stress_summary.exists() else None,
+                    model_call=lambda prompt: scoped_models.call_model(llm, prompt, system_prompt='你是一个运维分析助手，请用中文简洁回答，输出格式使用 Markdown。', timeout=120),
                 )
 
 

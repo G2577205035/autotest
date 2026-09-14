@@ -1,6 +1,6 @@
 # 烈马自动化测试平台：项目结构与接手指引
 
-> 最后更新：2026-09-10
+> 最后更新：2026-09-11
 > 适用项目：`auto-test` / Python 包 `auto_test`  
 > 维护要求：任何新增、删除、移动或重命名目录、源码分层、启动入口、部署文件的改动，都必须在同一次改动中更新本文件。
 
@@ -37,7 +37,7 @@
 | --- | --- | --- |
 | `src/` | 源码 | 标准 src-layout Python 包，业务代码只能在这里扩展 |
 | `tests/` | 测试 | 单元、集成、权限、安全、部署资产和静态页面回归 |
-| `config/` | 配置 | 脱敏模板与本机配置；`config/config.local.yml` 不提交 |
+| `config/` | 配置 | 脱敏模板与本机配置；`config/config.local.yml`、`config/ui-runtime.local.json` 不提交 |
 | `deploy/` | 部署 | Compose、生产变量模板、在线/离线镜像及 GPU burn 定义 |
 | `scripts/` | 工具 | 离线依赖准备、受控部署辅助和文档生成工具 |
 | `docs/` | 文档 | 架构、兼容、部署、验收、日报和历史资料 |
@@ -71,6 +71,7 @@ src/auto_test/
 ├── platform/       Web 平台仓储、权限、接口资产、队列和对象存储
 ├── static/         原生 HTML/CSS/JavaScript 页面资源
 ├── web.py          FastAPI 应用与 Web API 组合入口
+├── server_worker.py 独立 SSH 会话、采样与压测 Worker 入口
 └── worker.py       外部 Worker 入口
 ```
 
@@ -89,6 +90,7 @@ src/auto_test/
 - `src/auto_test/platform/` 提供任务、存储、权限、接口中心和队列等平台基础设施。
 - `src/auto_test/static/` 与 `src/auto_test/web.py` 共同构成当前 Web 层。
 - `src/auto_test/worker.py` 领取持久化任务；数据库是最终事实源，Redis 只做唤醒与短期心跳。
+- `src/auto_test/server_worker.py` 通过数据库租约独占服务器执行，使用既有 `monitoring/server_sessions.py` 和 `server_stress.py`；`monitoring/remote_server.py` 为 Web 代理，`platform/worker_rpc.py` 提供加密指令、一次性领取与结果清理。`platform_worker_leases` 与 `platform_worker_commands` 仅保存在平台库；没有新增 HTTP 端口。异常退出的过期所有权仅在操作员确认旧进程停止后显式回收，避免并行启动负载。回归位于 `tests/test_server_worker.py`。
 
 推荐依赖方向是“入口/Web → core、pipeline、monitoring、reporting → integrations/platform/common”。新增代码应放入职责最接近的模块，不能重新在根目录建立平铺业务模块。
 
@@ -100,11 +102,15 @@ src/auto_test/
 deploy/
 ├── compose.yml                    本地/自包含 Web + Worker + Redis 基线
 ├── compose.external.yml           复用外部 MySQL、MinIO、Redis 的部署定义
+├── compose.ui.yml                 可选 UI Worker、Internal 浏览器网络与白名单代理叠加定义
 ├── env.production.example         不含真实地址和凭据的生产变量模板
 └── docker/
     ├── Dockerfile                 在线依赖镜像
     ├── Dockerfile.offline         使用 vendor/ 的完全离线镜像
     ├── Dockerfile.evalscope-offline 在平台镜像上添加隔离 EvalScope 的离线镜像
+    ├── Dockerfile.ui-recorder     可选 Playwright/noVNC 录制镜像
+    ├── Dockerfile.ui-worker       带校验 Docker CLI 的独立 UI Worker 镜像
+    ├── ui-recorder.cjs            镜像内桌面启动、令牌网关与脚本捕获
     └── gpu-burn/
         ├── Dockerfile.runtime     封装已构建 gpu-burn 二进制
         ├── Dockerfile.universal   CUDA 11.8 通用架构构建
@@ -129,6 +135,8 @@ Compose 的构建上下文仍是项目根目录；移动部署文件时必须同
 ## 5. 工具、文档与测试
 
 - `scripts/prepare_offline_bundle.py`：准备并校验离线依赖包。
+- `scripts/prepare_ui_proxy.py`：根据明确指定的目标主机和端口生成 Squid 允许列表配置，不含公司地址、凭据或默认放行规则；`deploy/compose.ui.yml` 将 Web、UI Worker 和浏览器接入专用 Internal 网络，仅 UI Worker 挂载 Docker socket。录制连接支持本机 loopback 或 Docker DNS 两种模式，回放输入统一经 stdin 注入 tmpfs。
+- `docs/ui-server-deployment.md`：页面录制/回放的服务器部署、镜像与 CLI 校验、目标允许列表、Compose 叠加启动和回滚说明；与 `docs/ui-browser-recording.md` 的用户使用说明配套。
 - `scripts/model_evaluation_poc.py`：使用本机假 OpenAI 服务重复验证隔离 EvalScope 的标准评测、WMT24++ 与性能压测入口。
 - `scripts/upload_production_env.py`：在内存中组装生产变量并通过 SFTP 创建受限环境文件。
 - `scripts/documentation/`：一次性或可复用的文档生成工具；当前 `scripts/documentation/build_future_plan.py` 输出到 `deliverables/`。
@@ -144,11 +152,29 @@ Compose 的构建上下文仍是项目根目录；移动部署文件时必须同
 
 列表分页 UI 继续统一维护在 `src/auto_test/static/app.js`、`index.html` 和 `styles.css`；通用历史分页由既有 `platform/store.py` 提供，SQLite/MySQL 共用查询流程，`platform/api.py` 负责当前项目和历史数据权限。未增加新的源码层级或启动入口。
 
+接口自动化增强位于 `platform/interface_data.py`（SQLite/MySQL 共用数据集、计划及事务调度）、`platform/interface_data_api.py`（项目权限下的 API）与 `static/interface-automation.js`（场景内“数据与计划”弹窗）。`core/interface_scenario_manager.py` 的现有 Worker 负责到期调度及执行，未增加第三方调度服务；新增 `interface_datasets`、`interface_schedules` 和 `platform_dispatch_locks` 表，仅属于平台库。回归位于 `tests/test_interface_data.py`。
+
 全局外观由 `static/theme.js` 在样式加载前恢复浏览器主题选择，`static/theme.css` 提供浅色语义颜色、登录页适配和主题按钮。`styles.css` 中的主题变量保留原有深色值作为回退，所有组件（包括高优先级状态规则）使用同一套颜色边界；图表由 `app.js` 在主题变化时重绘。`tests/test_theme.py` 覆盖首屏偏好、切换/刷新/跨标签页同步、存储不可用回退、颜色令牌完整性和浅色状态对比度。
+
+2026-09-11 接口中心视觉优化复用 `static/index.html`、`app.js` 和 `theme.css`；四页签样式限定在 `#view-interfaces`，仍使用原 API、字段、权限、弹窗与分页。目录折叠为页面显示状态，导入帮助使用原生 `details/summary`。没有新增源码层级或启动入口；静态修订为 `20260911.ui2`。组件规范与验收说明在 `docs/interface-center-ui-spec-20260911.md`，可独立打开的合成数据预览为 `deliverables/interface-center-preview-20260911.html`；截图、浏览器几何数据、控件/函数保留核验和预览检查存放于 `.qa/interface-center-20260911/`，临时 QA/预览生成脚本位于既有 `tmp/`。这些是本地视觉交付物，不是部署包。
+
+2026-09-10 的本地 UI 改版继续使用原生 HTML/CSS/JavaScript，未新增源码层级或构建入口：`static/theme.css` 集中管理浅色/深色完整配色和全站组件外观，`styles.css` 保留业务布局、滚动和分页契约；`static/theme.js` 默认浅色并优先恢复已有偏好，`static/app.js` 的 `bindSidebar()` 仅管理侧栏展开/收缩及键盘行为。场景表的列内换行仍由 `styles.css` 管理；该次样式修订为 `20260910.ui2`，后续功能开发统一更新为 `20260910.dev1`，与服务器镜像版本分开；本次不修改部署文件、不打包、不更新服务器。隔离浏览器截图和检查记录位于 `.qa/ui-redesign-20260910/`，只含合成数据。
 
 - `docs/model-full-acceptance-20260909.md`：全量按钮、21 组指标、真实组合执行与报告验收；报告和轻量证据在 `deliverables/qwen-full-acceptance-20260909/`，最新发布清单在 `deliverables/liema-auto-2026.09.09.10/`。
 
 ## 6. 运行数据流
+
+2026-09-11 录制体验修订（`20260911.rec4`，已发布为 `2026.09.11.2`）：沿用 `static/ui-recorder.js` / `.css`、`index.html` 和 `ui_automation/recorder_api.py`，提供扩大工作区、受同源/父窗口校验的 noVNC 显示缩放、全屏与验证指引。`deploy/docker/ui-recorder.cjs` 按 Chromium 窗口实例名排列 1280×720 网页和等高 Inspector，不新增系统依赖、服务、端口或源代码层级；本次已重新构建录制镜像并同步 Web/UI Worker，原镜像及回退配置保留。定向回归沿用 `tests/test_ui_recording.py`，真实隔离容器布局证据位于 `.qa/ui-recording-layout-20260911/`。
+
+2026-09-11 页面内录制新增 `ui_automation/recordings.py`（`ui_recordings` 平台表、配额、超时、加密与事务保存）、`ui_automation/recorder_runtime.py`（独立 UI Worker 中的容器管理线程）和 `ui_automation/recorder_api.py`（录制 API、会话认证的 HTTP/WebSocket 桌面网关）。沿用 `ui_worker.py` / `auto-test-ui-worker`，没有新增宿主启动入口；Web 和 UI Worker 使用同一主机 Docker 引擎；宿主进程采用 loopback，独立 Compose 容器采用 Internal 网络与 Docker DNS。前端新增 `static/ui-recorder.js` 与 `static/ui-recorder.css`；录制脚本在原套件/运行快照中加密存储，`runner.py` 经 stdin 注入容器 tmpfs，原始产物加密归档。可选镜像文件位于 `deploy/docker/Dockerfile.ui-recorder`、`deploy/docker/ui-recorder.cjs`，原 `deploy/ui-runner-launcher.cjs` 补充录制输入协议；上述镜像已于 `2026.09.11.1` 构建并部署。说明为 `docs/ui-browser-recording.md`，回归为 `tests/test_ui_recording.py`，合成证据为 `.qa/ui-recording-20260911/`。
+
+2026-09-11 录制环境入口补齐：新增 `ui_automation/environment.py`，负责 Web 与同一安装目录下 UI Worker 共用的非敏感配置 `config/ui-runtime.local.json`，环境变量优先。该本机文件及原子写入暂存文件均由 `.gitignore`、`.dockerignore` 排除。`recorder_api.py` 提供逐项状态与仅平台管理员可写的设置接口；写入要求 UI Worker 租约已释放、无未结束任务，不新增数据库表或启动入口，不由 Web 安装或启动服务。`static/ui-recorder.js` / `.css` 提供主页与录制弹窗内的设置入口、权限提示、表单及手动启动说明；回归仍在 `tests/test_ui_recording.py`，合成浏览器证据为 `.qa/ui-environment-20260911/`。
+
+2026-09-10 本地开发新增：`src/auto_test/ui_automation/` 管理 UI 套件不可变版本、项目运行记录、API 和 Docker 隔离 Runner；`ui_worker.py` / `auto-test-ui-worker` 是独立入口，不在 Web 或普通 Worker 内执行导入脚本。`deploy/Dockerfile.ui-runner` 与 `deploy/ui-runner-launcher.cjs` 定义测试镜像，已随 `2026.09.11.1` 完成真实回放验收和部署。平台表为 `ui_suite_versions`、`ui_runs`，复用 `platform_worker_leases` 的 UI 所有权。前端是 `static/ui-automation.js`，报告复用 `reporting/tabular.py`；产物保存在 Artifact Store 的 `ui-runs/项目/运行/`。
+
+性能增强由 `monitoring/cpu_benchmark.py` 提供固定 SHA-256 工作负载及可停止的远端执行，`monitoring/performance_comparison.py` 和 `platform/performance_api.py` 负责跨任务比较快照、历史趋势和项目下载；前端为 `static/performance-comparison.js`，平台表为 `stress_comparisons`。`reporting/tabular.py` 管理新增 Word/PDF 表格报告，`reporting/fonts.py` 提供与应用配置解耦的统一中文字体，原 `enterprise._pdf_font_name()` 保持兼容入口。回归在 `tests/test_ui_automation.py`、`tests/test_performance_comparison.py`；完整本地接手说明是 `docs/development-features-20260910.md`。
+
+企业接入由 `platform/enterprise.py` 提供 OIDC/PKCE、显式账号绑定与 Vault KV v2 读取，`platform/model_access.py` 提供模型项目授权及无正文调用审计，前端为 `static/enterprise-settings.js`。新增平台表 `oidc_login_states`、`oidc_identity_bindings`、`model_profile_access`；回归为 `tests/test_enterprise_identity.py`、`tests/test_model_project_access.py`。功能默认关闭，未写入现场服务配置。
 
 ```text
 浏览器上传
@@ -176,3 +202,7 @@ Compose 的构建上下文仍是项目根目录；移动部署文件时必须同
 测试集详情继续位于既有 `static/app.js`、`index.html`、`styles.css`；复用 `platform/api.py` 的版本读取接口，以 `page/page_size` 和 `evaluation/persistence.py` 的有序 LIMIT/OFFSET 分页，仓储契约同步 `platform/contracts.py`。回归复用 `tests/test_model_evaluation_advanced.py`、`tests/test_workspace_pagination.py`，没有新增源码层级或启动入口。
 
 全站指定页跳转与每页条数复用上述静态文件；普通目录、审计、模型报告章节和详情抽屉共享分页控件与滚动区域，未新增源码层级。回归仍在 `tests/test_workspace_pagination.py`、`tests/test_static_ui.py`。`deploy/env.production.example` 与换机手册同步 `2026.09.10.3`；本机 `deliverables/liema-auto-2026.09.10.3/` 仅保留清单和验收证据，大包保留服务器。
+
+2026-09-10 用户授权发布 `2026.09.10.4`：生产变量模板与换机手册同步新版，纳入 AI 分析解析/诊断和分页等高布局修复，不改变源码层级、入口、服务或持久卷。本机 `deliverables/liema-auto-2026.09.10.4/` 仅保留清单与验收结果，完整交付包留在服务器；日常修改仍等待用户明确发布指令。
+
+2026-09-11 用户授权发布 `2026.09.11.2`：生产变量模板、换机手册和 UI 部署/回退说明同步新版；无数据库结构、服务拓扑或持久卷变化。本机 `deliverables/liema-auto-2026.09.11.2-*` 保留轻量校验记录，服务器版本目录保留源码、构建记录与离线交付物。

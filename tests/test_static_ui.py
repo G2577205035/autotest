@@ -349,8 +349,8 @@ class StaticWorkspaceTests(unittest.TestCase):
         self.assertNotIn('key === "cpu_temp_c" || key === "gpu_temp_c"', self.javascript)
 
     def test_desktop_typography_has_readable_1080p_baseline_and_cache_version(self):
-        self.assertIn('styles.css?v=20260910.4', self.html)
-        self.assertIn('app.js?v=20260910.4', self.html)
+        self.assertIn('styles.css?v=20260911.ui2', self.html)
+        self.assertIn('app.js?v=20260911.ui2', self.html)
         self.assertIn('@media(min-width:981px)', self.stylesheet)
         self.assertIn('body{font-size:16px;line-height:1.6}', self.stylesheet)
         self.assertIn('table{font-size:15px}', self.stylesheet)

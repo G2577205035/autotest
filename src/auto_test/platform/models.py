@@ -56,11 +56,12 @@ def save_profile(store: PlatformRepository, data: dict[str, Any]) -> dict[str, A
     return public_profile(store.save_model_profile(data, encrypted))
 
 
-def get_active_model_config(store: PlatformRepository | None = None) -> dict[str, Any]:
+def get_active_model_config(store: PlatformRepository | None = None, *, project_id: str = "") -> dict[str, Any]:
     if store is None:
         prepare_runtime_layout()
-    store = store or create_platform_repository(PROJECT_ROOT)
-    profile = store.active_model_profile()
+    store = store or create_platform_repository(PROJECT_ROOT, recover_jobs=False)
+    from auto_test.platform.model_access import ProjectModelStore
+    profile = ProjectModelStore(store, project_id).active_model_profile()
     if not profile:
         return {}
     item = dict(profile)
@@ -131,7 +132,9 @@ def test_profile(store: PlatformRepository, profile_id: str) -> dict[str, Any]:
     profile = store.get_model_profile(profile_id)
     if not profile:
         raise KeyError(profile_id)
-    answer = call_model(
+    from auto_test.platform.model_access import ProjectModelStore
+    invoke = store.call_model if isinstance(store, ProjectModelStore) else call_model
+    answer = invoke(
         profile,
         "只回复：连接成功",
         system_prompt="你是模型连通性检测助手，只输出四个汉字：连接成功。",

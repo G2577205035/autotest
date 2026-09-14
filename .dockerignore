@@ -10,6 +10,8 @@ instance
 logs
 tmp
 config/config.local.yml
+config/ui-runtime.local.json
+config/.ui-runtime-*.tmp
 .env
 .env.production
 .env.local

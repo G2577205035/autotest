@@ -216,6 +216,9 @@ def _resolve_conclusion(snapshot: dict[str, Any], model_store=None) -> str:
         return fallback
     try:
         from auto_test.platform.models import call_model
+        from auto_test.platform.model_access import ProjectModelStore
+        if isinstance(model_store, ProjectModelStore):
+            call_model = model_store.call_model
 
         profile = model_store.active_model_profile()
         if not profile:
@@ -454,30 +457,8 @@ def build_docx(snapshot: dict[str, Any], output_path: Path) -> None:
 
 
 def _pdf_font_name() -> str:
-    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-
-    candidates = [
-        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-        Path("/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf"),
-        Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "msyh.ttc",
-        Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "simhei.ttf",
-        Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "simsun.ttc",
-    ]
-    for path in candidates:
-        if path.is_file():
-            try:
-                pdfmetrics.registerFont(TTFont("LiemaCJK", str(path), subfontIndex=0))
-                return "LiemaCJK"
-            except Exception:
-                continue
-    try:
-        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
-        return "STSong-Light"
-    except Exception:
-        pass
-    return "Helvetica"
+    from auto_test.reporting.fonts import pdf_font_name
+    return pdf_font_name()
 
 
 def build_pdf(snapshot: dict[str, Any], output_path: Path) -> None:

@@ -1,0 +1,9 @@
+FROM mcr.microsoft.com/playwright:v1.63.0-noble
+ENV DEBIAN_FRONTEND=noninteractive PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+RUN apt-get update && apt-get install -y --no-install-recommends xvfb openbox x11vnc novnc websockify fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /work
+RUN npm install --save-exact --ignore-scripts @playwright/test@1.63.0 acorn@8.15.0
+COPY deploy/docker/ui-recorder.cjs /opt/liema-recorder.cjs
+USER 1000:1000
+ENTRYPOINT ["node", "/opt/liema-recorder.cjs"]

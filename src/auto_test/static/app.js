@@ -288,6 +288,7 @@ function gotoView(name) {
   $$(".view").forEach(function(view){ view.classList.toggle("active", view.id === "view-" + name); });
   $("#pageTitle").textContent = titles[name] || name;
   $("#pageSubtitle").textContent = subtitles[name] || "";
+  if (name === 'ui-automation') { $('#pageTitle').textContent = 'UI 自动化'; $('#pageSubtitle').textContent = '脚本套件、版本与浏览器测试结果'; if (window.loadUiAutomation) window.loadUiAutomation(); }
   if (name === "monitor") refreshMonitor(true);
   if (name === "new-run") loadServerWorkspace(false);
   if (name === "stress") loadServerWorkspace();
@@ -357,6 +358,7 @@ function syncIdentityChrome() {
   const projectOptions=projects.map(function(project){return '<option value="'+esc(project.id)+'">'+esc(businessProjectLabel(project))+"</option>";}).join("");
   ["projectSwitcher","interfaceProjectSwitcher"].forEach(function(id){const node=$("#"+id);if(!node)return;node.innerHTML=projectOptions;node.value=state.projectId;node.disabled=projects.length<2;});
   $("#identityNavItem").classList.toggle("hidden",!user.is_superuser);
+  $$('[data-enterprise-bindings],[data-model-access]').forEach(function(node){node.classList.toggle("hidden",!user.is_superuser);});
   $$('[data-view="models"]').forEach(function(node){node.classList.toggle("hidden",!hasPermission("platform:manage"));});
   $$('[data-view="evaluation"]').forEach(function(node){node.classList.toggle("hidden",!hasPermission("evaluation:view"));});
   $$('[data-view="new-run"],[data-goto="new-run"]').forEach(function(node){node.classList.toggle("permission-hidden",!hasPermission("test:execute"));});
@@ -375,6 +377,7 @@ async function completeAuthentication(identity) {
 async function initializeAuth() {
   try {
     const status=await api("/api/auth/status");
+    $("#oidcLoginLink").classList.toggle("hidden",!status.sso_enabled);
     if(status.authenticated) await completeAuthentication(status);
     else showAuth(Boolean(status.setup_required));
   } catch(error) {
@@ -551,6 +554,7 @@ function syncUploadModeUi() {
 }
 async function refreshAll() {
   const jobs=[loadRuns(),loadReports()];
+  if ($('#view-ui-automation').classList.contains('active') && window.loadUiAutomation) jobs.push(window.loadUiAutomation());
   if($("#view-new-run").classList.contains("active"))jobs.push(loadServerWorkspace(false));
   if($("#view-models").classList.contains("active"))jobs.push(loadModels());
   if($("#view-evaluation").classList.contains("active"))jobs.push(loadEvaluationWorkspace(false));
@@ -1283,6 +1287,7 @@ function resetStressDiscovery(message) {
   updateStressStartState();
 }
 function applyStressPreset(name) {
+  if (name !== 'custom') $('#stressCpuBenchmark').checked = false;
   const preset=stressPresets[name] || stressPresets.quick;
   state.stressPreset=name in stressPresets ? name : "quick";
   $$("[data-stress-preset]").forEach(function(card){card.classList.toggle("active",card.dataset.stressPreset===state.stressPreset);});
@@ -1808,6 +1813,7 @@ function retryStressJob(jobId) {
   $("#stressDuration").value=String(options.duration || 60);
   $("#stressWorkers").value=String(options.workers == null ? 0 : options.workers);
   $("#stressCpuLoad").value=String(options.cpu_load || 80);
+  $('#stressCpuBenchmark').checked=Boolean(options.cpu_benchmark);
   $("#stressGpuMemoryPercent").value=String(options.gpu_memory_percent || 90);
   $("#stressSafetyEnabled").checked=options.safety_enabled !== false;
   $("#stressCpuTempLimit").value=String(options.cpu_temp_limit || 90);
@@ -1842,6 +1848,7 @@ function stressPayload() {
     duration:Number($("#stressDuration").value || 60),
     workers:Number($("#stressWorkers").value || 0),
     cpu_load:Number($("#stressCpuLoad").value || 80),
+    cpu_benchmark:$('#stressCpuBenchmark').checked,
     gpu_devices:state.selectedGpuDevices.join(","),
     gpu_burn_source:$("#stressGpuSource").value.trim(),
     test_preset:state.stressPreset,
@@ -2400,7 +2407,7 @@ async function loadModels() {
 function renderModels() {
     $("#modelCount").textContent = state.models.length + " 项";
     $("#modelList").innerHTML = listPage("models",state.models,3).items.map(function(model){
-      return '<div class="model-item"><div class="model-item-head"><strong>' + esc(model.name) + "</strong>" + (model.is_active?'<span class="status succeeded">已启用</span>':'<span class="status idle">未启用</span>') + '</div><p>' + esc(model.model_name) + "<br>" + esc(model.base_url) + "<br>Key: " + (model.has_api_key?"••••••••":"未配置") + '</p><div class="model-actions"><button data-model-edit="' + model.id + '">编辑</button><button data-model-test="' + model.id + '">连通测试</button>' + (!model.is_active?'<button data-model-activate="'+model.id+'">启用</button>':"") + "</div></div>";
+      return '<div class="model-item"><div class="model-item-head"><strong>' + esc(model.name) + "</strong>" + (model.is_active?'<span class="status succeeded">已启用</span>':'<span class="status idle">未启用</span>') + '</div><p>' + esc(model.model_name) + "<br>" + esc(model.base_url) + "<br>Key: " + (model.has_api_key?"••••••••":"未配置") + '</p><div class="model-actions"><button data-model-access="' + model.id + '">项目授权</button><button data-model-edit="' + model.id + '">编辑</button><button data-model-test="' + model.id + '">连通测试</button>' + (!model.is_active?'<button data-model-activate="'+model.id+'">启用</button>':"") + "</div></div>";
     }).join("") || '<div class="model-empty"><span class="model-empty-icon" aria-hidden="true">＋</span><strong>尚未配置模型</strong><p>保存模型后，可在这里进行编辑、连通测试与启用切换。模型不是任务主流程的必选项。</p></div>';
 }
 async function submitModel(event) {
@@ -2523,13 +2530,13 @@ function renderInterfaceAssets(){
       if(item.status!=="published")actions+='<button class="text-button" type="button" data-interface-asset-publish="'+esc(item.id)+'">发布</button>';
       actions+='<button class="text-button danger-text" type="button" data-interface-asset-delete="'+esc(item.id)+'">删除</button>';
     }
-    return '<tr><td><strong>'+esc(item.name)+'</strong><small class="table-subline">'+esc(item.description||"暂无接口说明")+'</small></td><td>'+esc(item.module_name||"未分组")+'</td><td><div class="interface-request-cell"><span class="interface-method '+String(item.method||"get").toLowerCase()+'">'+esc(item.method)+'</span><code class="interface-path">'+esc(target||item.path)+'</code></div></td><td>'+esc(item.environment_name||"独立地址")+'</td><td>v'+Number(item.current_version||1)+'<small class="table-subline">共 '+Number(item.version_count||0)+' 版</small></td><td>'+statusPill(item.status)+'</td><td><span class="interface-table-actions">'+actions+'</span></td></tr>';
+    return '<tr><td><strong>'+esc(item.name)+'</strong><small class="table-subline">'+esc(item.description||"暂无接口说明")+'</small></td><td>'+esc(item.module_name||"未分组")+'</td><td><div class="interface-request-cell"><span class="interface-method '+String(item.method||"get").toLowerCase()+'">'+esc(item.method)+'</span><code class="interface-path" title="'+esc(target||item.path)+'">'+esc(target||item.path)+'</code></div></td><td>'+esc(item.environment_name||"独立地址")+'</td><td><span class="interface-version-tag">v'+Number(item.current_version||1)+'</span><small class="table-subline">共 '+Number(item.version_count||0)+' 版</small></td><td>'+statusPill(item.status)+'</td><td><span class="interface-table-actions interface-reveal-actions">'+actions+'</span></td></tr>';
   }).join("")||'<tr><td colspan="7" class="interface-empty"><div class="interface-catalog-empty"><i aria-hidden="true">HTTP</i><strong>'+(state.interfaces.length?"没有符合筛选条件的接口":"还没有接口")+'</strong><span>'+(state.interfaces.length?"调整模块、环境或搜索条件后再试。":"新建一个 HTTP 接口，维护地址、参数、请求头、请求体与版本。")+'</span>'+(interfaceCanManage()&&!state.interfaces.length?'<button class="button primary" type="button" data-interface-empty-create>＋ 新建第一个接口</button>':'')+'</div></td></tr>';
 }
 function renderInterfaceEnvironments(){
   $("#interfaceEnvironmentList").innerHTML=listPage("interfaceEnvironments",state.interfaceEnvironments,4).items.map(function(item){
     const actions=interfaceCanManage()?'<span class="interface-row-actions"><button type="button" data-interface-environment-edit="'+esc(item.id)+'">编辑</button><button class="danger-text" type="button" data-interface-environment-delete="'+esc(item.id)+'">删除</button></span>':'';
-    return '<article class="interface-environment-card"><div><span class="account-state active"><i></i>'+(item.is_default?'默认环境':'可用环境')+'</span><h4>'+esc(item.name)+'</h4><code>'+esc(item.base_url||"未配置 Base URL")+'</code><p>'+esc(item.description||"暂无环境说明")+'</p></div><dl><div><dt>环境变量</dt><dd>'+Number(item.variable_count||0)+'</dd></div><div><dt>关联接口</dt><dd>'+Number(item.asset_count||0)+'</dd></div></dl>'+actions+'</article>';
+    return '<article class="interface-environment-card"><div><h4>'+esc(item.name)+'</h4><span class="account-state active"><i></i>'+(item.is_default?'默认环境':'可用环境')+'</span><code>'+esc(item.base_url||"未配置 Base URL")+'</code><p>'+esc(item.description||"暂无环境说明")+'</p></div><dl><div><dt>环境变量</dt><dd>'+Number(item.variable_count||0)+'</dd></div><div><dt>关联接口</dt><dd>'+Number(item.asset_count||0)+'</dd></div></dl>'+actions+'</article>';
   }).join("")||'<div class="interface-empty-state"><strong>尚未配置运行环境</strong><span>创建环境后可集中维护 Base URL 与环境变量。</span></div>';
 }
 function renderInterfaceVariables(){
@@ -2554,8 +2561,9 @@ function renderInterfaceScenarios(){
   $("#interfaceScenarioBody").innerHTML=scenarioPage.map(function(item){
     let actions=interfaceCanExecute()?'<button class="text-button interface-debug-action" type="button" data-interface-scenario-run="'+esc(item.id)+'">运行</button>':'';
     actions+='<button class="text-button" type="button" data-interface-scenario-history="'+esc(item.id)+'">结果</button>';
+    actions+='<button class="text-button" type="button" data-interface-automation="'+esc(item.id)+'">数据与计划</button>';
     if(interfaceCanManage())actions+='<button class="text-button" type="button" data-interface-scenario-edit="'+esc(item.id)+'">编辑</button><button class="text-button danger-text" type="button" data-interface-scenario-delete="'+esc(item.id)+'">删除</button>';
-    return '<tr><td><input type="checkbox" data-interface-scenario-select="'+esc(item.id)+'" '+(selected.has(item.id)?'checked':'')+' aria-label="选择 '+esc(item.name)+'"></td><td><strong>'+esc(item.name)+'</strong><small class="table-subline">'+esc(item.description||"暂无场景说明")+'</small></td><td>'+esc(item.environment_name||"跟随接口")+'</td><td>'+Number(item.step_count||0)+' 步<small class="table-subline">'+Object.keys(item.parameters||{}).length+' 个用例参数</small></td><td>'+(item.last_run_status?interfaceScenarioStatus(item.last_run_status)+'<small class="table-subline">'+esc(fmtTime(item.last_run_at))+'</small>':'<span class="muted">尚未执行</span>')+'</td><td><span class="interface-table-actions">'+actions+'</span></td></tr>';
+    return '<tr><td><input type="checkbox" data-interface-scenario-select="'+esc(item.id)+'" '+(selected.has(item.id)?'checked':'')+' aria-label="选择 '+esc(item.name)+'"></td><td><strong class="interface-description-title" tabindex="0" title="'+esc(item.description||"暂无场景说明")+'" aria-label="'+esc(item.name+"："+(item.description||"暂无场景说明"))+'">'+esc(item.name)+'</strong><small class="table-subline interface-sr-only">'+esc(item.description||"暂无场景说明")+'</small></td><td>'+esc(item.environment_name||"跟随接口")+'</td><td>'+Number(item.step_count||0)+' 步<small class="table-subline">'+Object.keys(item.parameters||{}).length+' 个用例参数</small></td><td>'+(item.last_run_status?interfaceScenarioStatus(item.last_run_status)+'<small class="table-subline">'+esc(fmtTime(item.last_run_at))+'</small>':'<span class="muted">尚未执行</span>')+'</td><td><span class="interface-table-actions interface-reveal-actions">'+actions+'</span></td></tr>';
   }).join("")||'<tr><td colspan="6" class="interface-empty"><div class="interface-catalog-empty"><i>FLOW</i><strong>还没有接口场景</strong><span>创建场景后即可编排接口步骤、提取变量、配置断言并生成执行报告。</span>'+(interfaceCanManage()?'<button class="button primary" type="button" data-interface-scenario-empty-create>＋ 新建第一个场景</button>':'')+'</div></td></tr>';
 }
 function renderInterfaceScenarioRuns(){
@@ -2563,7 +2571,7 @@ function renderInterfaceScenarioRuns(){
   $("#interfaceScenarioRunBody").innerHTML=state.interfaceScenarioRuns.map(function(run){
     const summary=run.summary||{};
     const reports=(run.docx_path?'<a class="text-button" href="/api/interface-scenario-runs/'+encodeURIComponent(run.id)+'/download/docx">DOCX</a>':'')+(run.pdf_path?'<a class="text-button" href="/api/interface-scenario-runs/'+encodeURIComponent(run.id)+'/download/pdf">PDF</a>':'');
-    return '<tr><td>'+esc(fmtTime(run.created_at))+'</td><td><button class="text-button" type="button" data-interface-scenario-run-detail="'+esc(run.id)+'">'+esc(run.scenario_name)+'</button></td><td>'+interfaceScenarioStatus(run.status)+'</td><td>'+Number(summary.passed_steps||0)+' / '+Number(summary.total_steps||0)+' 通过</td><td>'+Number(summary.elapsed_ms||0).toFixed(1)+' ms</td><td><span class="interface-table-actions">'+(reports||'<span class="muted">未生成</span>')+'</span></td></tr>';
+    return '<tr><td>'+esc(fmtTime(run.created_at))+'</td><td><button class="text-button" type="button" data-interface-scenario-run-detail="'+esc(run.id)+'">'+esc(run.scenario_name)+'</button></td><td>'+interfaceScenarioStatus(run.status)+'</td><td>'+Number(summary.passed_steps||0)+' / '+Number(summary.total_steps||0)+' 通过</td><td>'+Number(summary.elapsed_ms||0).toFixed(1)+' ms</td><td><span class="interface-table-actions interface-report-links">'+(reports||'<span class="muted">未生成</span>')+'</span></td></tr>';
   }).join("")||'<tr><td colspan="6" class="interface-empty">暂无场景执行记录</td></tr>';
 }
 function interfaceScenarioEnvironmentOptions(selected){
@@ -3184,7 +3192,18 @@ function bind() {
   $("#interfaceAssetForm").addEventListener("input",function(event){if(event.target.matches("[data-interface-row-key]"))updateInterfaceRequestCounts();if(!$("#interfaceAssetError").classList.contains("hidden"))setInterfaceAssetError("");});
   $("#interfaceVariableSecret").addEventListener("change",syncInterfaceVariableSecret);
   $("#interfaceAssetSearch").addEventListener("input",renderInterfaceAssets);
-  $("#interfaceModuleSearch").addEventListener("input",renderInterfaceModules);
+  $("#interfaceModuleCollapse").addEventListener("click",function(){
+    const expanded=this.getAttribute("aria-expanded")!=="true";
+    this.setAttribute("aria-expanded",String(expanded));
+    $("#interfaceModuleList").classList.toggle("interface-modules-collapsed",!expanded);
+  });
+  $("#interfaceModuleSearch").addEventListener("input",function(){
+    if(this.value.trim()){
+      $("#interfaceModuleCollapse").setAttribute("aria-expanded","true");
+      $("#interfaceModuleList").classList.remove("interface-modules-collapsed");
+    }
+    renderInterfaceModules();
+  });
   $("#interfaceEnvironmentFilter").addEventListener("change",renderInterfaceAssets);
   $("#createUserForm").addEventListener("submit",createIdentityUser);
   $("#createProjectForm").addEventListener("submit",createIdentityProject);
@@ -3203,7 +3222,73 @@ function bind() {
   document.addEventListener("keydown",function(event){if(event.key==="Escape"){closeServerProfileDrawer();closeGpuDetailDrawer();["interfaceModuleDialog","currentProjectDialog","interfaceEnvironmentDialog","interfaceVariableDialog","interfaceVersionsDialog","interfaceScenarioRunDialog"].forEach(closeInterfaceDialog);["identityUserDrawer","identityProjectDrawer","identityMembershipDrawer"].forEach(closeIdentityDrawer);}});
   window.addEventListener("resize",function(){const run=state.runs.find(function(x){return x.id===state.monitorRunId;});if(run)renderMonitor(run);const session=state.serverSessions.find(function(x){return x.id===state.serverSessionId;});if(session)renderServerSessionMetrics(session);});
 }
+// Navigation presentation is independent of project selection and task state.
+function bindSidebar() {
+  const shell = $("#appShell"), sidebar = $("#appSidebar"), toggle = $("#sidebarToggle");
+  const backdrop = $(".sidebar-backdrop"), mobile = window.matchMedia("(max-width: 760px)");
+  const preferenceKey = "liema.sidebar.collapsed";
+  let collapsed = false, opened = false;
+  try { collapsed = localStorage.getItem(preferenceKey) === "true"; } catch (_) {}
+  $$("#mainNav .nav-item").forEach(function(button) {
+    const label = button.textContent.trim();
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    Array.from(button.childNodes).filter(function(node) { return node.nodeType === Node.TEXT_NODE && node.textContent.trim(); }).forEach(function(node) {
+      const text = document.createElement("b");
+      text.className = "nav-label";
+      text.textContent = node.textContent;
+      node.replaceWith(text);
+    });
+  });
+  function sync() {
+    const expanded = mobile.matches ? opened : !collapsed;
+    shell.classList.toggle("sidebar-collapsed", collapsed && !mobile.matches);
+    shell.classList.toggle("sidebar-open", opened && mobile.matches);
+    sidebar.inert = mobile.matches && !opened;
+    backdrop.hidden = !(mobile.matches && opened);
+    toggle.setAttribute("aria-expanded", String(expanded));
+    toggle.setAttribute("aria-label", expanded ? "收起导航" : "展开导航");
+    toggle.title = expanded ? "收起导航" : "展开导航";
+    window.dispatchEvent(new Event("resize"));
+  }
+  function closeMobile() {
+    if (!opened) return;
+    opened = false;
+    sync();
+    toggle.focus();
+  }
+  toggle.addEventListener("click", function() {
+    if (mobile.matches) opened = !opened;
+    else {
+      collapsed = !collapsed;
+      try { localStorage.setItem(preferenceKey, String(collapsed)); } catch (_) {}
+    }
+    sync();
+    if (mobile.matches && opened) $(".nav-item.active", sidebar).focus();
+  });
+  backdrop.addEventListener("click", closeMobile);
+  $("#mainNav").addEventListener("click", function(event) { if (event.target.closest(".nav-item")) closeMobile(); });
+  document.addEventListener("keydown", function(event) {
+    if (!mobile.matches || !opened) return;
+    if (event.key === "Escape") { event.preventDefault(); closeMobile(); }
+    if (event.key === "Tab") {
+      const buttons = $$("button", sidebar).filter(function(button) { return !button.disabled && button.getClientRects().length; });
+      const first = buttons[0], last = buttons[buttons.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !sidebar.contains(document.activeElement))) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && (document.activeElement === last || !sidebar.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
+    }
+  });
+  mobile.addEventListener("change", function() { opened = false; sync(); });
+  window.addEventListener("storage", function(event) {
+    if (event.key === preferenceKey || event.key === null) {
+      try { collapsed = localStorage.getItem(preferenceKey) === "true"; } catch (_) {}
+      sync();
+    }
+  });
+  sync();
+}
 document.addEventListener("DOMContentLoaded",function(){
+  bindSidebar();
   $("#evaluationSuiteDrawer").addEventListener("close",function(){
     if(this.open)return;
     evaluationSuiteRequest++;evaluationSuiteDetail=null;

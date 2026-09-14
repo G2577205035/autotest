@@ -216,6 +216,9 @@ def generate_analysis(report, root, model_store, model_profile_id=""):
     try:
         import requests
         from auto_test.platform.models import ModelResponseError, ModelSecretError, call_model
+        from auto_test.platform.model_access import ProjectModelStore
+        if isinstance(model_store, ProjectModelStore):
+            call_model = model_store.call_model
         profile = model_store.get_model_profile(model_profile_id) if model_profile_id else model_store.active_model_profile()
         if model_profile_id and not profile:
             raise KeyError(model_profile_id)

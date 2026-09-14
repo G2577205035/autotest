@@ -199,6 +199,8 @@ class ServerStressManager:
     def submit(self, options: dict[str, Any]) -> dict[str, Any]:
         if self.store is None:
             raise RuntimeError("未配置压测任务仓储")
+        if options.get('cpu_benchmark') and ('cpu' not in options.get('modes', []) or 'gpu' in options.get('modes', []) or not 1 <= int(options.get('workers') or 0) <= 64 or not 10 <= int(options.get('duration') or 0) <= 300 or int(options.get('cpu_load') or 0) != 100):
+            raise RuntimeError('CPU 基准参数无效：仅 CPU、100% 负载、1～64 个进程、10～300 秒')
         persisted_options = dict(options)
         password = str(persisted_options.pop("password", "") or "")
         session_id = str(persisted_options.get("session_id") or "").strip()
@@ -413,7 +415,12 @@ class ServerStressManager:
             )
             monitor.start()
 
-            if "cpu" in modes:
+            if options.get('cpu_benchmark'):
+                from auto_test.monitoring.cpu_benchmark import run_cpu_benchmark
+                self.store.update_stress_job(job_id, message='正在执行 SHA-256 CPU 基准')
+                benchmark = run_cpu_benchmark(ssh, duration=duration, workers=int(options['workers']), guard_callback=lambda: self._raise_if_unsafe(job_id, options))
+                cpu_summary = {'status': 'succeeded', 'backend': 'liema-sha256-v1', 'benchmark': benchmark}
+            elif "cpu" in modes:
                 self._raise_if_stopped(job_id)
                 self.store.update_stress_job(job_id, message="正在执行 CPU 压测")
                 cpu_runner = CpuStressRunner(ssh)
@@ -476,7 +483,7 @@ class ServerStressManager:
                 )
                 if cpu_runner and cpu_runner.install_error():
                     cpu_summary["stress_ng_diagnosis"] = cpu_runner.install_diagnosis()
-            elif "gpu" not in modes:
+            elif "gpu" not in modes and not options.get('cpu_benchmark'):
                 self._cooperative_wait(job_id, duration, guard_callback=lambda: self._raise_if_unsafe(job_id, options))
 
             if monitor:

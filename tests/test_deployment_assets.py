@@ -12,6 +12,31 @@ DOCKER_ROOT = DEPLOY_ROOT / "docker"
 
 
 class ProductionDeploymentAssetsTests(unittest.TestCase):
+    def test_ui_overlay_confines_docker_control_and_browser_network(self):
+        compose = yaml.safe_load((DEPLOY_ROOT / 'compose.ui.yml').read_text(encoding='utf-8'))
+        self.assertTrue(compose['networks']['ui-test']['internal'])
+        services = compose['services']
+        self.assertEqual(services['ui-worker']['extends']['service'], 'worker')
+        self.assertEqual(services['web']['environment'], services['ui-worker']['environment'])
+        self.assertEqual(services['web']['environment']['LIEMA_UI_RECORDER_CONNECT_MODE'], 'network')
+        for name, service in services.items():
+            self.assertNotIn('ports', service)
+            if name != 'ui-worker':
+                self.assertNotIn('/var/run/docker.sock', str(service))
+        self.assertIn('/var/run/docker.sock:/var/run/docker.sock', services['ui-worker']['volumes'])
+
+    def test_ui_proxy_requires_explicit_hosts_ports_and_denies_other_destinations(self):
+        from scripts.prepare_ui_proxy import configuration
+        config = configuration(['app.example.test', '127.0.0.2'], [443, 80, 443])
+        self.assertIn('acl approved_ports port 80 443', config)
+        self.assertIn('acl approved_addresses dst 127.0.0.2', config)
+        self.assertIn('acl approved_domains dstdomain app.example.test', config)
+        self.assertTrue(config.endswith('http_access deny all\n'))
+        self.assertIn('access_log none', config)
+        for hosts, ports in [([], [80]), (['app.test'], []), (['app.test'], [65536]), (['*.test'], [80]), (['app.test\nhttp_access allow all'], [80])]:
+            with self.subTest(hosts=hosts, ports=ports), self.assertRaises(ValueError):
+                configuration(hosts, ports)
+
     def test_external_compose_reuses_dependencies_without_defining_redis(self):
         compose = yaml.safe_load(
             (DEPLOY_ROOT / "compose.external.yml").read_text(encoding="utf-8")

@@ -5,8 +5,8 @@
   const key = "liema.theme";
   const root = document.documentElement;
   function savedTheme() {
-    try { return localStorage.getItem(key) === "light" ? "light" : "dark"; }
-    catch (_) { return "dark"; }
+    try { return localStorage.getItem(key) === "dark" ? "dark" : "light"; }
+    catch (_) { return "light"; }
   }
   function syncButtons() {
     const next = root.dataset.theme === "light" ? "深色" : "浅色";

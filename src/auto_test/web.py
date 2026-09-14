@@ -33,6 +33,8 @@ from auto_test.platform.identity import create_identity_api, install_identity_gu
 from auto_test.platform.secrets import SecretEncryptionError, decrypt_secret, encrypt_secret
 from auto_test.platform.upload_ownership import UPLOAD_ID_PATTERN, authorize_upload
 from auto_test.core.task_queue import create_task_signal_queue, task_execution_mode
+from auto_test.monitoring.remote_server import server_execution_mode
+from auto_test.platform.worker_rpc import WorkerMailbox
 
 
 BASE_DIR = PROJECT_ROOT
@@ -124,6 +126,8 @@ interface_scenario_manager = report_manager.interface_scenario_manager
 model_evaluation_manager = report_manager.model_evaluation_manager
 identity_api, identity_service = create_identity_api(platform_store)
 install_identity_guard(app, identity_service)
+from auto_test.ui_automation.recorder_api import register_recorder_gateway
+register_recorder_gateway(app, platform_store, identity_service)
 
 
 def _identity(request: Request | None) -> dict:
@@ -224,6 +228,8 @@ async def health():
         "task_queue_backend": task_signal_queue.backend,
         "task_execution_mode": execution_mode,
         "task_queue": queue_status,
+        "server_execution_mode": server_execution_mode(),
+        "server_worker": {"available": True} if server_execution_mode() == "embedded" else {"available": (await run_in_threadpool(WorkerMailbox(platform_store).status))["available"]},
     }
 
 
